@@ -368,7 +368,7 @@ const daysAgo = (n: number) =>
  * Build an Account record with sensible nullable defaults so seed call sites
  * only have to specify the fields that matter for each company.
  */
-function makeAccount(
+export function makeAccount(
   partial: Partial<Account> & {
     id: number;
     name: string;
@@ -377,8 +377,6 @@ function makeAccount(
   },
 ): Account {
   return {
-    id: partial.id,
-    name: partial.name,
     portalId: null,
     oldCompanyName: null,
     state: null,
@@ -393,7 +391,6 @@ function makeAccount(
     stripeId: null,
     oldStripeIds: null,
     formationStatus: null,
-    ownerName: partial.ownerName,
     archived: false,
     parentAccountId: null,
     companyPhone: null,
@@ -419,7 +416,6 @@ function makeAccount(
     bankingAppMessage: null,
     industry: null,
     website: null,
-    createdAt: partial.createdAt,
     createdByName: null,
     lastModifiedAt: null,
     lastModifiedByName: null,

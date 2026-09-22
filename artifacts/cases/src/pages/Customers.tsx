@@ -25,7 +25,7 @@ export function Customers() {
     return data.filter(
       (c) =>
         c.name.toLowerCase().includes(q) ||
-        c.email.toLowerCase().includes(q) ||
+        (c.email ?? "").toLowerCase().includes(q) ||
         (c.company ?? "").toLowerCase().includes(q),
     );
   }, [customers.data, search]);

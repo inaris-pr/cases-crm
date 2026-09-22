@@ -60,7 +60,8 @@ export function CasesList() {
           }).toString()}`,
         ),
       ),
-    enabled: view === "table",
+    // Table and cards share this query; the board fetches its own data.
+    enabled: view !== "board",
   });
 
   function openNewCase(s?: CaseStatus) {

@@ -25,6 +25,7 @@ import {
   contactsForAccount,
   accountsForContact,
   primaryContactForAccount,
+  makeAccount,
   type Case,
   type CasePriority,
   type CaseStatus,
@@ -791,7 +792,7 @@ export function registerRoutes(app: Express) {
       const me = currentUser(req) ?? lead.ownerName;
 
       // 1. Create Account
-      const account: Account = {
+      const account: Account = makeAccount({
         id: nextAccountId(),
         name: body.accountName,
         state: body.accountState ?? lead.intendedState ?? null,
@@ -801,7 +802,10 @@ export function registerRoutes(app: Express) {
         parentAccountId: null,
         ownerName: me,
         createdAt: now,
-      };
+        createdByName: me,
+        lastModifiedAt: now,
+        lastModifiedByName: me,
+      });
       store.accounts.push(account);
 
       // 2. Create Contact

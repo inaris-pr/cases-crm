@@ -532,7 +532,7 @@ function ClientSearchModal({
       (c) =>
         c.name.toLowerCase().includes(needle) ||
         (c.company ?? "").toLowerCase().includes(needle) ||
-        c.email.toLowerCase().includes(needle),
+        (c.email ?? "").toLowerCase().includes(needle),
     );
   }, [q, customers]);
 
