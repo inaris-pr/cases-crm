@@ -33,6 +33,7 @@ Run from `cases-app/`. Requires Node ≥20 and pnpm 9.0.0 (`corepack prepare pnp
 | `pnpm dev:api` | API only |
 | `pnpm dev:web` | Frontend only (proxies /api to :3001) |
 | `pnpm typecheck` | tsc --noEmit across the workspace — **must stay clean** |
+| `pnpm test` | Vitest + Supertest suite for the API — **must stay green** |
 | `pnpm build` | esbuild bundle for the API, `tsc -b && vite build` for the web |
 | `pnpm api:generate` | Orval regen from the OpenAPI spec — **do not run** until the spec is refreshed; it would generate a client for the stale contract |
 
@@ -73,6 +74,31 @@ it, debounced, after every successful non-GET request.
 - Types are duplicated by design between `api-server/src/store.ts` and
   `cases/src/lib/api.ts`. Change one, change the other in the same commit.
 
+## Tests
+
+`pnpm test` from the root, or `pnpm --filter @cases/api-server test`.
+Vitest + Supertest, in `artifacts/api-server/test/`. API only.
+
+- **Isolation is the important part.** `test/setup.ts` chdirs into a fresh
+  temp directory before anything imports the store, so the suite can never
+  read or write `artifacts/api-server/data/store.json`. The pool is `forks`
+  (not `threads`) because `process.chdir()` throws in worker threads, and a
+  process per file also re-runs the module-level `seed()` so every file starts
+  from identical data. `test/isolation.test.ts` asserts all of this rather
+  than trusting it — **do not weaken those tests.**
+- `test/helpers/app.ts` assembles the app the way `src/index.ts` does, minus
+  pino-http and `listen()`. Its error handler is a copy of the one in
+  `index.ts` — **change one, change the other.**
+- Tests assert seed counts (17 accounts, 21 contacts, 15 cases, 65 tasks,
+  12 documents, 8 leads, and **zero** conversations). Change the seed and these
+  fail by design; update them deliberately.
+- Anything comparing against `os.tmpdir()` must compare `fs.realpathSync()` of
+  both sides — macOS resolves `/var` to `/private/var`, so raw string
+  comparison passes on Linux and fails on a Mac.
+- Some tests pin behaviour that is wrong but real — the duplicate-DM test, for
+  instance. They say so in a comment. Don't "fix" production to make a test
+  read better; change the test when you change the behaviour on purpose.
+
 ## Guardrails
 
 Do not, without being asked:
@@ -97,4 +123,5 @@ Do not, without being asked:
 3. The flow you touched actually runs — boot the API and exercise it, don't
    infer from types.
 4. `store.json` is intact (`git status` should not show it; it is ignored).
-5. There are **no automated tests in this repo.** Nothing will catch you.
+5. `pnpm test` is green. The suite covers the API only — **nothing tests the
+   frontend**, so UI changes still need a browser.

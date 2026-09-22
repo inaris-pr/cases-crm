@@ -67,10 +67,13 @@ Sign in with any of the seeded users — password `test123` for all three:
 | `pnpm dev:api` | API only |
 | `pnpm dev:web` | Frontend only |
 | `pnpm typecheck` | TypeScript across the workspace — currently clean |
+| `pnpm test` | API test suite (Vitest + Supertest) |
 | `pnpm build` | Production builds for everything |
 | `pnpm api:generate` | Orval regen — **don't**, the spec it reads is stale |
 
-There are no tests and no lint step (`pnpm lint` is a no-op).
+The test suite covers the API only; there is no frontend test coverage and no
+lint step (`pnpm lint` is a no-op). Tests run against throwaway data and never
+touch `store.json`.
 
 ## Data
 
@@ -84,8 +87,9 @@ The API keeps everything in memory and persists the whole store to
   `store.json` and restart to return to the recovered state.
 
 Seeded content: 17 companies, 21 contacts, 8 leads, 15 cases across every
-status and priority, 65 tasks, 12 documents, 15 logged interactions, and a
-team message thread. Everything is fictional.
+status and priority, 65 tasks, 12 documents and 15 logged interactions.
+Messaging starts empty — conversations are created from the UI. Everything is
+fictional.
 
 ## Switching to Postgres
 

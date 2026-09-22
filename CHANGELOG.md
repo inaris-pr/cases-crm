@@ -9,7 +9,44 @@ recovered working tree — the project had no repository, so there is no history
 
 ## [Unreleased]
 
-Nothing yet. Feature development is paused pending review of the recovery.
+### Added
+- **Automated API test suite** — Vitest + Supertest, **104 tests across 12
+  files** in `artifacts/api-server/test/`, derived from the 67-check
+  verification harness written during recovery. Covers auth, stats and team, leads, lead conversion
+  (a dedicated regression suite for the malformed-Account defect), accounts,
+  contacts and account-contact links, cases and every filter, case detail,
+  tasks, documents, interactions, thread, mentions, messages, the legacy
+  `/customers` projection, and the validation/404 contracts.
+- `test/isolation.test.ts`, which asserts the suite's own safety properties:
+  it runs from a throwaway working directory, writes its store there, cannot
+  reach `artifacts/api-server/data/store.json`, and starts every file from the
+  deterministic seed.
+- `pnpm test` at the root and in `@cases/api-server`, plus `test:watch`.
+- `artifacts/api-server/tsconfig.test.json`; the package's `typecheck` script
+  now covers the test sources as well as `src/`.
+
+### Changed
+- Default branch renamed `master` → `main`.
+- `artifacts/api-server` gains `vitest`, `supertest` and `@types/supertest` as
+  dev dependencies. No production dependency changed.
+
+### Fixed
+- Documentation had recorded "1 conversation" as seed content (and the README
+  "a team message thread"). Both were read off the runtime `store.json` rather
+  than the seed: `store.ts` creates **no** conversations or messages, because
+  its only `conversations.push()` is inside the never-called
+  `findOrCreateDm()`. Corrected in `CLAUDE_HANDOFF.md`, `README.md` and
+  `CLAUDE.md`.
+
+### Notes
+- `POST /api/conversations` never calls the `findOrCreateDm()` helper that
+  `store.ts` exports, so duplicate DMs between the same two people are
+  reachable. The suite **pins this existing behaviour** rather than changing
+  it; fixing it is a deliberate decision, not a cleanup.
+- The test app helper duplicates the error handler from `src/index.ts`.
+  Removing the duplication needs a production refactor (`createApp()`), which
+  was out of scope.
+- Feature development remains paused pending review.
 
 ---
 

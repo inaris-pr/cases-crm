@@ -4,8 +4,9 @@
 re-discovering the repository. Written 2026-09-22, after the recovery and
 stabilization pass. If you change the architecture, update this file.
 
-**Status at time of writing:** recovered, stabilized, typecheck clean, backend
-verified. Feature development has **not** resumed.
+**Status at time of writing:** recovered, stabilized, typecheck clean, backed
+up to a private GitHub remote, and covered by an automated API test suite.
+Feature development has **not** resumed. The default branch is `main`.
 
 ---
 
@@ -52,8 +53,11 @@ successful non-GET request. On boot, `loadFromDisk()` rehydrates from that file
 unless one of two schema guards fires, in which case the demo seed re-runs.
 
 Seed contents: 17 accounts, 21 contacts, 23 links, 8 leads, 15 cases, 65 tasks,
-12 documents, 15 interactions, 14 thread entries, 3 users, 1 conversation.
-All fictional — invented companies, EINs, filing IDs, `example.com` URLs.
+12 documents, 15 interactions, 14 thread entries, 3 users — and **no
+conversations or messages**; the only `conversations.push()` in `store.ts`
+sits inside the never-called `findOrCreateDm()`, so every conversation in a
+running install was made through the UI. All fictional — invented companies,
+EINs, filing IDs, `example.com` URLs.
 
 `store.snapshot.json` (committed) is a restore point taken 2026-09-22.
 
@@ -117,6 +121,22 @@ Verified 2026-09-22 by 67 API-level checks against a booted server.
 | Insights | Charts off `/stats` and `/cases`, per-assignee filter |
 
 **UI rendering has not been verified in this pass** — only the API beneath it.
+
+### Test coverage
+
+`pnpm test` runs Vitest + Supertest over the API: 12 files in
+`artifacts/api-server/test/` covering auth, stats, leads, lead conversion,
+accounts, contacts and links, cases and every filter, case detail, tasks,
+documents, interactions, thread, mentions, messages, the legacy `/customers`
+projection, and the validation/404 contracts.
+
+Isolation is enforced, not assumed: `test/setup.ts` chdirs into a temp
+directory before the store module loads, so the suite cannot touch
+`artifacts/api-server/data/store.json`, and `test/isolation.test.ts` asserts
+that it doesn't. The vitest pool is `forks` because `process.chdir()` throws in
+worker threads.
+
+**There is no frontend test coverage.** The React app is untested.
 
 ## 4. What is prototype-only
 
@@ -204,7 +224,16 @@ Unrouted and imported by nothing. Left in place deliberately:
   Correct, just verbose; left alone as an unrelated refactor.
 - **Tailwind v4 is a beta** (`4.0.0-beta.6`); esbuild is pinned to `0.21.5` by
   a root `pnpm.overrides` entry to avoid a multi-version postinstall failure.
-- **Zero automated tests.** No runner, no CI, no `.github/`.
+- **`findOrCreateDm()` in `store.ts` is exported but never called.**
+  `POST /conversations` always inserts a new row, so two DMs between the same
+  pair are reachable from the UI. `messages.test.ts` pins the current
+  behaviour with a comment saying so; wiring the helper up would be a
+  deliberate behaviour change, not a cleanup.
+- **The test app helper duplicates `index.ts`'s error handler.** Extracting a
+  shared `createApp()` would remove the copy but is a production refactor and
+  has not been done. Until then the two must be changed together.
+- **No frontend tests and no CI.** The API suite exists; nothing runs it
+  automatically, and nothing covers the React app.
 - Four stray zero-byte `_tmp_3_*` files from the machine transfer; now ignored.
 
 ---
@@ -234,25 +263,26 @@ Unrouted and imported by nothing. Left in place deliberately:
 
 Nothing below has been started. Items 1–3 are cheap and reduce risk sharply.
 
-1. **A test harness.** There is none, and every change to a 16k-line codebase
-   is currently unverifiable. Vitest + supertest against the API would cover
-   the most surface for the least effort. The 67-check script written during
-   recovery is a reasonable starting specification.
-2. **Finish the Customer → Account migration.** Point `CasesBoard.tsx` and the
+1. **CI.** The API suite exists but nothing runs it on push. A GitHub Actions
+   workflow doing `pnpm install --frozen-lockfile && pnpm typecheck && pnpm test`
+   is an afternoon, and it makes every later item safer.
+2. **Frontend test coverage.** The React app — 12k lines, including the two
+   duplicated case-detail implementations — has none.
+3. **Finish the Customer → Account migration.** Point `CasesBoard.tsx` and the
    New Case drawer at `/api/accounts`, then delete `legacyCustomerView()`, the
    `/customers` routes, the synthesized `customer` object, `customerId`, and
    the three dead page files. Self-contained, and it removes a whole category
    of confusion.
-3. **Consolidate the duplicated case UI.** Extract the shared tabs from
+4. **Consolidate the duplicated case UI.** Extract the shared tabs from
    `CaseDetail.tsx` and `CaseDetailModal.tsx`; have the modal render the page's
    components. ~1,670 lines becomes roughly half that.
-4. **Decide the fate of `lib/db`, `lib/api-spec`, `lib/api-client-react`.**
+5. **Decide the fate of `lib/db`, `lib/api-spec`, `lib/api-client-react`.**
    Either refresh all three against the real model or delete them. Leaving
    stale ones in place is worse than either.
-5. **Real persistence.** The JSON store will not survive concurrent users. If
+6. **Real persistence.** The JSON store will not survive concurrent users. If
    Postgres is the destination, `lib/db` needs rewriting first (item 4).
-6. **Real auth** before this is reachable by anyone but its author.
-7. **The AI layer** from the product brief — case summarization, issue
+7. **Real auth** before this is reachable by anyone but its author.
+8. **The AI layer** from the product brief — case summarization, issue
    explanation, suggested customer replies.
-8. **Back the prototype pages with real APIs** — Accounting, Automations,
+9. **Back the prototype pages with real APIs** — Accounting, Automations,
    Settings — or remove them from the nav until they are real.
