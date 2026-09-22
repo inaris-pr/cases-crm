@@ -31,6 +31,43 @@ async function listFor(caseId: number) {
   return body as any[];
 }
 
+let globalSeq = 0;
+
+/**
+ * A global automation created by and for the calling test.
+ *
+ * Tests must NOT share a global. Renaming or deleting one is a legitimate
+ * operation, so a test that mutates a shared global silently breaks every
+ * later test that looks it up. Each test gets its own.
+ */
+async function createGlobal(name?: string, graph: any = GRAPH) {
+  globalSeq += 1;
+  const owned = await createCaseAutomation(1, name ?? `Test global ${globalSeq}`, graph);
+  const { body } = await request(app)
+    .post(`/api/automations/${owned.id}/promote`)
+    .set(asMe)
+    .send({})
+    .expect(200);
+  return body;
+}
+
+/**
+ * The global created by the seed. Read-only for this suite — nothing here may
+ * rename, re-graph or delete it. The explicit throw turns a regression into a
+ * diagnosis instead of "Cannot read properties of undefined".
+ */
+async function seededGlobal() {
+  const { body } = await request(app).get("/api/automations?scope=global").expect(200);
+  const row = (body as any[]).find((g) => g.name === SEEDED_GLOBAL);
+  if (!row) {
+    throw new Error(
+      `the seeded global "${SEEDED_GLOBAL}" is missing — an earlier test renamed or deleted it. ` +
+        "Tests must create their own global with createGlobal() rather than mutating the seeded one.",
+    );
+  }
+  return row;
+}
+
 describe("case-scoped automations", () => {
   it("creates one owned by the case", async () => {
     const a = await createCaseAutomation(1, "Case 1 only");
@@ -91,6 +128,7 @@ describe("case-scoped automations", () => {
 });
 
 describe("global automations", () => {
+  // The only test that touches the seeded global, and it only reads.
   it("offers the seeded global to every case without duplicating rows", async () => {
     for (const caseId of [1, 2, 3, 8, 12]) {
       const rows = await listFor(caseId);
@@ -155,10 +193,9 @@ describe("global automations", () => {
   });
 
   it("reports blast radius for the confirmation dialogs", async () => {
-    const globals = (await request(app).get("/api/automations?scope=global").expect(200)).body;
-    const seeded = globals.find((g: any) => g.name === SEEDED_GLOBAL);
+    const shared = await createGlobal("Blast radius probe");
 
-    const usage = (await request(app).get(`/api/automations/${seeded.id}/usage`).expect(200)).body;
+    const usage = (await request(app).get(`/api/automations/${shared.id}/usage`).expect(200)).body;
     expect(usage.scope).toBe("global");
     expect(usage.caseCount).toBeGreaterThan(1);
 
@@ -169,46 +206,45 @@ describe("global automations", () => {
 });
 
 describe("customizing a global for one case", () => {
-  let globalId: number;
-
-  beforeEach(async () => {
-    const globals = (await request(app).get("/api/automations?scope=global").expect(200)).body;
-    globalId = globals.find((g: any) => g.name === SEEDED_GLOBAL).id;
-  });
-
+  // Each test creates its own global. Sharing one would make the suite
+  // order-dependent: the "later edits" test below deliberately renames and
+  // re-graphs the global it is given.
   it("forks it into the case and hides the original there only", async () => {
+    const shared = await createGlobal("Customize: hide original");
+
     const fork = (
       await request(app)
-        .post(`/api/automations/${globalId}/fork`)
+        .post(`/api/automations/${shared.id}/fork`)
         .set(asMe)
-        .send({ caseId: 1 })
+        .send({ caseId: 2 })
         .expect(201)
     ).body;
 
     expect(fork).toMatchObject({
       scope: "case",
-      caseId: 1,
-      derivedFromAutomationId: globalId,
-      name: `${SEEDED_GLOBAL} (this case)`,
+      caseId: 2,
+      derivedFromAutomationId: shared.id,
+      name: "Customize: hide original (this case)",
     });
 
-    const forCase1 = await listFor(1);
-    expect(forCase1.find((r) => r.id === globalId)).toBeUndefined(); // original hidden
-    const customized = forCase1.find((r) => r.id === fork.id);
+    const forCase2 = await listFor(2);
+    expect(forCase2.find((r) => r.id === shared.id)).toBeUndefined(); // original hidden
+    const customized = forCase2.find((r) => r.id === fork.id);
     expect(customized).toMatchObject({ customized: true, inherited: false });
 
     // Every other case still inherits the untouched original.
-    const forCase2 = await listFor(2);
-    expect(forCase2.find((r) => r.id === globalId)).toBeTruthy();
-    expect(forCase2.find((r) => r.id === fork.id)).toBeUndefined();
+    const forCase3 = await listFor(3);
+    expect(forCase3.find((r) => r.id === shared.id)).toBeTruthy();
+    expect(forCase3.find((r) => r.id === fork.id)).toBeUndefined();
   });
 
   it("deep-copies the graph so the fork shares no structure with the global", async () => {
-    const fork = (
-      await request(app).post(`/api/automations/${globalId}/fork`).set(asMe).send({ caseId: 2 }).expect(201)
-    ).body;
-    const original = (await request(app).get(`/api/automations/${globalId}`).expect(200)).body;
+    const shared = await createGlobal("Customize: deep copy");
+    const original = (await request(app).get(`/api/automations/${shared.id}`).expect(200)).body;
 
+    const fork = (
+      await request(app).post(`/api/automations/${shared.id}/fork`).set(asMe).send({ caseId: 4 }).expect(201)
+    ).body;
     expect(fork.graph).toEqual(original.graph);
 
     await request(app)
@@ -217,87 +253,98 @@ describe("customizing a global for one case", () => {
       .send({ graph: { nodes: [{ id: "solo", type: "delay", x: 0, y: 0, config: { duration: "9h" } }], edges: [] } })
       .expect(200);
 
-    const globalAfter = (await request(app).get(`/api/automations/${globalId}`).expect(200)).body;
+    const globalAfter = (await request(app).get(`/api/automations/${shared.id}`).expect(200)).body;
     expect(globalAfter.graph).toEqual(original.graph);
-    expect(globalAfter.graph.nodes).toHaveLength(5);
+    expect(globalAfter.graph.nodes).toHaveLength(GRAPH.nodes.length);
   });
 
   it("does not let later edits to the global reach the customized copy", async () => {
+    const shared = await createGlobal("Customize: later edits");
     const fork = (
-      await request(app).post(`/api/automations/${globalId}/fork`).set(asMe).send({ caseId: 3 }).expect(201)
+      await request(app).post(`/api/automations/${shared.id}/fork`).set(asMe).send({ caseId: 5 }).expect(201)
     ).body;
 
+    // Destructive on purpose — and safe, because this global belongs to this test.
     await request(app)
-      .patch(`/api/automations/${globalId}`)
+      .patch(`/api/automations/${shared.id}`)
       .set(asMe)
       .send({ name: "Global edited later", graph: { nodes: [], edges: [] } })
       .expect(200);
 
     const forkAfter = (await request(app).get(`/api/automations/${fork.id}`).expect(200)).body;
-    expect(forkAfter.name).toBe(`${SEEDED_GLOBAL} (this case)`);
-    expect(forkAfter.graph.nodes).toHaveLength(5);
+    expect(forkAfter.name).toBe("Customize: later edits (this case)");
+    expect(forkAfter.graph).toEqual(GRAPH);
+    expect(forkAfter.graph.nodes).toHaveLength(GRAPH.nodes.length);
   });
 
   it("refuses to customize the same global twice for one case", async () => {
-    await request(app).post(`/api/automations/${globalId}/fork`).set(asMe).send({ caseId: 4 }).expect(201);
+    const shared = await createGlobal("Customize: twice");
+    await request(app).post(`/api/automations/${shared.id}/fork`).set(asMe).send({ caseId: 6 }).expect(201);
 
     const { body } = await request(app)
-      .post(`/api/automations/${globalId}/fork`)
+      .post(`/api/automations/${shared.id}/fork`)
       .set(asMe)
-      .send({ caseId: 4 })
+      .send({ caseId: 6 })
       .expect(409);
 
     expect(body.error).toBe("already_customized");
   });
 
   it("refuses to customize a case-scoped automation", async () => {
-    const own = await createCaseAutomation(5, "Not global");
+    const own = await createCaseAutomation(7, "Not global");
 
     const { body } = await request(app)
       .post(`/api/automations/${own.id}/fork`)
       .set(asMe)
-      .send({ caseId: 5 })
+      .send({ caseId: 7 })
       .expect(409);
 
     expect(body.error).toBe("not_global");
   });
 
   it("404s when the target case does not exist", async () => {
+    const shared = await createGlobal("Customize: bad case");
+
     await request(app)
-      .post(`/api/automations/${globalId}/fork`)
+      .post(`/api/automations/${shared.id}/fork`)
       .set(asMe)
       .send({ caseId: 99999 })
       .expect(404);
+  });
+
+  it("leaves the seeded global untouched throughout", async () => {
+    // Sentinel: proves nothing in this describe mutated shared seed state.
+    const seeded = await seededGlobal();
+    expect(seeded.name).toBe(SEEDED_GLOBAL);
+    expect(seeded.nodeCount).toBe(5);
   });
 });
 
 describe("reverting a customized automation to the global", () => {
   it("deletes the fork and restores the inherited original", async () => {
-    const globals = (await request(app).get("/api/automations?scope=global").expect(200)).body;
-    const globalId = globals.find((g: any) => g.name === SEEDED_GLOBAL).id;
+    const shared = await createGlobal("Revert: restore");
 
     const fork = (
-      await request(app).post(`/api/automations/${globalId}/fork`).set(asMe).send({ caseId: 6 }).expect(201)
+      await request(app).post(`/api/automations/${shared.id}/fork`).set(asMe).send({ caseId: 8 }).expect(201)
     ).body;
-    expect((await listFor(6)).find((r) => r.id === globalId)).toBeUndefined();
+    expect((await listFor(8)).find((r) => r.id === shared.id)).toBeUndefined();
 
     const { body } = await request(app).post(`/api/automations/${fork.id}/revert`).set(asMe).send({}).expect(200);
-    expect(body.restored).toMatchObject({ id: globalId, scope: "global" });
+    expect(body.restored).toMatchObject({ id: shared.id, scope: "global" });
 
-    const after = await listFor(6);
-    expect(after.find((r) => r.id === globalId)).toBeTruthy();
+    const after = await listFor(8);
+    expect(after.find((r) => r.id === shared.id)).toBeTruthy();
     expect(after.find((r) => r.id === fork.id)).toBeUndefined();
 
     await request(app).get(`/api/automations/${fork.id}`).expect(404);
   });
 
   it("leaves the global itself untouched", async () => {
-    const globals = (await request(app).get("/api/automations?scope=global").expect(200)).body;
-    const globalId = globals.find((g: any) => g.name === SEEDED_GLOBAL).id;
-    const before = (await request(app).get(`/api/automations/${globalId}`).expect(200)).body;
+    const shared = await createGlobal("Revert: global intact");
+    const before = (await request(app).get(`/api/automations/${shared.id}`).expect(200)).body;
 
     const fork = (
-      await request(app).post(`/api/automations/${globalId}/fork`).set(asMe).send({ caseId: 7 }).expect(201)
+      await request(app).post(`/api/automations/${shared.id}/fork`).set(asMe).send({ caseId: 9 }).expect(201)
     ).body;
     await request(app)
       .patch(`/api/automations/${fork.id}`)
@@ -306,16 +353,28 @@ describe("reverting a customized automation to the global", () => {
       .expect(200);
     await request(app).post(`/api/automations/${fork.id}/revert`).set(asMe).send({}).expect(200);
 
-    const after = (await request(app).get(`/api/automations/${globalId}`).expect(200)).body;
+    const after = (await request(app).get(`/api/automations/${shared.id}`).expect(200)).body;
     expect(after.name).toBe(before.name);
     expect(after.graph).toEqual(before.graph);
   });
 
   it("refuses to revert something that is not a customization", async () => {
-    const own = await createCaseAutomation(8, "Plain case automation");
+    const own = await createCaseAutomation(10, "Plain case automation");
 
     const { body } = await request(app).post(`/api/automations/${own.id}/revert`).set(asMe).send({}).expect(409);
     expect(body.error).toBe("not_customized");
+  });
+
+  it("refuses to revert when the original global has since been deleted", async () => {
+    const shared = await createGlobal("Revert: original deleted");
+    const fork = (
+      await request(app).post(`/api/automations/${shared.id}/fork`).set(asMe).send({ caseId: 11 }).expect(201)
+    ).body;
+
+    await request(app).delete(`/api/automations/${shared.id}`).expect(204);
+
+    const { body } = await request(app).post(`/api/automations/${fork.id}/revert`).set(asMe).send({}).expect(409);
+    expect(body.error).toBe("not_customized"); // provenance was cleared by the delete
   });
 });
 

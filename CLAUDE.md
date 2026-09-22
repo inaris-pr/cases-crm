@@ -98,6 +98,13 @@ Vitest + Supertest, in `artifacts/api-server/test/`. API only.
 - Some tests pin behaviour that is wrong but real — the duplicate-DM test, for
   instance. They say so in a comment. Don't "fix" production to make a test
   read better; change the test when you change the behaviour on purpose.
+- **A test must never mutate shared seed state that later tests read.** All
+  tests in a file share one seeded store, and they run in declaration order, so
+  renaming or deleting a seeded record breaks every later test that looks it up
+  — and the failure surfaces far from its cause. Create your own fixtures
+  instead (`createGlobal()` in `automations.test.ts` is the pattern). Where a
+  test must read seeded data, go through a helper that throws a diagnostic if
+  it has gone missing.
 
 ## Guardrails
 
