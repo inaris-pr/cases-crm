@@ -260,6 +260,70 @@ export interface Mention {
   createdAt: string;
 }
 
+// ── Automations ──────────────────────────────────────────────────────────────
+// An automation is a saved visual workflow graph. Its `scope` decides who can
+// see it:
+//
+//   "case"   — belongs to exactly one case (`caseId` set). Invisible elsewhere.
+//   "global" — belongs to no case (`caseId` null) and is offered to EVERY case,
+//              existing and future, by union at read time. A global automation
+//              is ONE row; it is never materialised per case.
+//
+// A case can fork a global ("Customize for this case"): that creates a
+// case-scoped copy carrying `derivedFromAutomationId`, and the original global
+// is then hidden from that case only. Deleting the fork ("Revert to global")
+// restores the inherited original.
+export type AutomationScope = "case" | "global";
+
+export type AutomationNodeType =
+  | "trigger"
+  | "filter"
+  | "assign"
+  | "notify"
+  | "delay"
+  | "branch"
+  | "http"
+  | "update";
+
+export interface AutomationNode {
+  id: string;
+  type: AutomationNodeType;
+  x: number;
+  y: number;
+  config: Record<string, string>;
+}
+
+export interface AutomationEdge {
+  from: string;
+  to: string;
+}
+
+export interface AutomationGraph {
+  nodes: AutomationNode[];
+  edges: AutomationEdge[];
+  /** Last saved pan/zoom, so a graph reopens where the author left it. */
+  viewport?: { pan: { x: number; y: number }; zoom: number } | null;
+}
+
+export interface Automation {
+  id: number;
+  name: string;
+  scope: AutomationScope;
+  /** Non-null iff scope === "case". */
+  caseId: number | null;
+  graph: AutomationGraph;
+  enabled: boolean;
+  /** Set on a case-scoped fork of a global; hides that global from this case. */
+  derivedFromAutomationId: number | null;
+  /** Where a promoted global originally came from, for provenance only. */
+  originCaseId: number | null;
+  ownerName: string;
+  createdAt: string;
+  createdByName: string | null;
+  updatedAt: string;
+  lastModifiedByName: string | null;
+}
+
 // ── State ────────────────────────────────────────────────────────────────────
 export const store = {
   accounts: [] as Account[],
@@ -275,6 +339,7 @@ export const store = {
   threadEntries: [] as CaseThreadEntry[],
   mentions: [] as Mention[],
   users: [] as User[],
+  automations: [] as Automation[],
   seq: {
     account: 0,
     contact: 0,
@@ -290,6 +355,7 @@ export const store = {
     threadEntry: 0,
     mention: 0,
     user: 0,
+    automation: 0,
   },
 };
 
@@ -311,6 +377,7 @@ export const nextCaseInteractionId = () => nextId("caseInteraction");
 export const nextThreadEntryId = () => nextId("threadEntry");
 export const nextMentionId = () => nextId("mention");
 export const nextUserId = () => nextId("user");
+export const nextAutomationId = () => nextId("automation");
 
 export function userByEmail(email: string): User | undefined {
   const lc = email.toLowerCase();
@@ -424,6 +491,80 @@ export function makeAccount(
 }
 
 // ── Load / persist ──────────────────────────────────────────────────────────
+
+/**
+ * Every collection paired with the `store.seq` counter that issues its ids.
+ * Used by normalizeLoaded() to back-fill both when an older store.json
+ * predates a collection.
+ */
+const COLLECTION_SEQ: ReadonlyArray<
+  readonly [keyof typeof store & string, keyof typeof store.seq]
+> = [
+  ["accounts", "account"],
+  ["contacts", "contact"],
+  ["accountContactLinks", "accountContactLink"],
+  ["leads", "lead"],
+  ["cases", "case"],
+  ["tasks", "task"],
+  ["documents", "document"],
+  ["conversations", "conversation"],
+  ["messages", "message"],
+  ["caseInteractions", "caseInteraction"],
+  ["threadEntries", "threadEntry"],
+  ["mentions", "mention"],
+  ["users", "user"],
+  ["automations", "automation"],
+];
+
+/**
+ * Make a store hydrated from disk safe to write to.
+ *
+ * loadFromDisk() does Object.assign(store, parsed), which replaces whole
+ * objects — including `seq`. A store.json written before a collection existed
+ * therefore leaves that collection undefined and, worse, leaves its seq
+ * counter undefined, so nextId() would compute `undefined + 1 = NaN` and every
+ * new record would be created with id NaN.
+ *
+ * This runs after the assign and, for each known collection:
+ *   - replaces a missing or non-array collection with []
+ *   - repairs a missing, non-numeric or too-low seq counter by setting it to
+ *     the highest id actually present
+ *
+ * It is additive: existing data is never dropped or rewritten. Adding a new
+ * collection in future means adding one line to COLLECTION_SEQ above.
+ */
+function normalizeLoaded() {
+  for (const [collection, seqKey] of COLLECTION_SEQ) {
+    const rows = (store as Record<string, unknown>)[collection];
+    if (!Array.isArray(rows)) {
+      (store as Record<string, unknown>)[collection] = [];
+    }
+    const list = (store as Record<string, unknown>)[collection] as Array<{
+      id?: unknown;
+    }>;
+    const highestId = list.reduce(
+      (max, row) =>
+        typeof row?.id === "number" && Number.isFinite(row.id) && row.id > max
+          ? row.id
+          : max,
+      0,
+    );
+    const current = store.seq[seqKey];
+    if (typeof current !== "number" || !Number.isFinite(current) || current < highestId) {
+      store.seq[seqKey] = highestId;
+    }
+  }
+
+  // caseNumber has no collection of its own — recover it from the case numbers
+  // already issued (CASE-001 -> 1) so the next case does not collide.
+  if (typeof store.seq.caseNumber !== "number" || !Number.isFinite(store.seq.caseNumber)) {
+    store.seq.caseNumber = store.cases.reduce((max, c) => {
+      const n = Number(String(c.caseNumber ?? "").replace(/\D/g, ""));
+      return Number.isFinite(n) && n > max ? n : max;
+    }, 0);
+  }
+}
+
 function loadFromDisk(): boolean {
   try {
     if (!fs.existsSync(STORE_FILE)) return false;
@@ -442,6 +583,7 @@ function loadFromDisk(): boolean {
       return false;
     }
     Object.assign(store, parsed);
+    normalizeLoaded();
     return true;
   } catch (err) {
     console.warn("[store] failed to load persisted store:", err);
@@ -1275,6 +1417,43 @@ export function seed() {
       createdAt: daysAgo(1), updatedAt: daysAgo(1),
     },
   );
+
+  // ── Automations ─────────────────────────────────────────────────────────
+  // One global automation, carrying the graph the standalone Automations page
+  // used to show as its hardcoded demo. Seeding it global (rather than per
+  // case) demonstrates the union model: it appears in every case, existing and
+  // future, from a single row.
+  store.automations.push({
+    id: nextAutomationId(),
+    name: "High-priority intake routing",
+    scope: "global",
+    caseId: null,
+    graph: {
+      nodes: [
+        { id: "n1", type: "trigger", x: 80, y: 120, config: { event: "case.created" } },
+        { id: "n2", type: "filter", x: 360, y: 120, config: { condition: "priority == 'high'" } },
+        { id: "n3", type: "assign", x: 640, y: 60, config: { assignee: "team:litigation" } },
+        { id: "n4", type: "notify", x: 640, y: 200, config: { channel: "slack", message: "High priority case opened" } },
+        { id: "n5", type: "update", x: 920, y: 120, config: { field: "status", value: "review" } },
+      ],
+      edges: [
+        { from: "n1", to: "n2" },
+        { from: "n2", to: "n3" },
+        { from: "n2", to: "n4" },
+        { from: "n3", to: "n5" },
+        { from: "n4", to: "n5" },
+      ],
+      viewport: null,
+    },
+    enabled: true,
+    derivedFromAutomationId: null,
+    originCaseId: null,
+    ownerName: "Iris Burgos",
+    createdAt: daysAgo(20),
+    createdByName: "Iris Burgos",
+    updatedAt: daysAgo(20),
+    lastModifiedByName: "Iris Burgos",
+  });
 
   persist();
 }
