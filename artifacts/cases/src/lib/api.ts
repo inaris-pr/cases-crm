@@ -320,6 +320,73 @@ export interface CaseThreadEntry {
   createdAt: string;
 }
 
+// ── Automations ────────────────────────────────────────────────────────────
+// Mirrors artifacts/api-server/src/store.ts. A global automation is one row
+// offered to every case by union at read time; a case that customizes one gets
+// its own copy and the original is hidden from that case only.
+export type AutomationScope = "case" | "global";
+
+export type AutomationNodeType =
+  | "trigger"
+  | "filter"
+  | "assign"
+  | "notify"
+  | "delay"
+  | "branch"
+  | "http"
+  | "update";
+
+export interface AutomationNode {
+  id: string;
+  type: AutomationNodeType;
+  x: number;
+  y: number;
+  config: Record<string, string>;
+}
+
+export interface AutomationEdge {
+  from: string;
+  to: string;
+}
+
+export interface AutomationGraph {
+  nodes: AutomationNode[];
+  edges: AutomationEdge[];
+  viewport?: { pan: { x: number; y: number }; zoom: number } | null;
+}
+
+export interface Automation {
+  id: number;
+  name: string;
+  scope: AutomationScope;
+  caseId: number | null;
+  graph: AutomationGraph;
+  enabled: boolean;
+  derivedFromAutomationId: number | null;
+  originCaseId: number | null;
+  ownerName: string;
+  createdAt: string;
+  createdByName: string | null;
+  updatedAt: string;
+  lastModifiedByName: string | null;
+}
+
+/** List row: the graph is omitted and the UI flags are derived server-side. */
+export interface AutomationSummary extends Omit<Automation, "graph"> {
+  nodeCount: number;
+  edgeCount: number;
+  /** Reaches this case through the global union rather than being owned by it. */
+  inherited: boolean;
+  /** A case-scoped row standing in for a global. */
+  customized: boolean;
+}
+
+export interface AutomationUsage {
+  scope: AutomationScope;
+  caseCount: number;
+  forkedByCaseCount: number;
+}
+
 export interface Mention {
   id: number;
   threadEntryId: number;

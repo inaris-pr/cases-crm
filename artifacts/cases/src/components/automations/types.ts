@@ -1,41 +1,20 @@
 import { Zap, Filter, UserCheck, Bell, Clock, GitBranch, Globe, Edit } from "lucide-react";
 
 /**
- * Graph model for the visual automation builder.
+ * Builder-side constants for the visual automation editor.
  *
- * These mirror the server types in artifacts/api-server/src/store.ts — the
- * house convention is to duplicate rather than share a package, so change both
- * together.
+ * The graph types themselves live in lib/api.ts alongside every other type
+ * that mirrors the server, and are re-exported here so builder code has one
+ * import site.
  */
-export type AutomationNodeType =
-  | "trigger"
-  | "filter"
-  | "assign"
-  | "notify"
-  | "delay"
-  | "branch"
-  | "http"
-  | "update";
+import type { AutomationGraph, AutomationNodeType } from "@/lib/api";
 
-export interface AutomationNode {
-  id: string;
-  type: AutomationNodeType;
-  x: number;
-  y: number;
-  config: Record<string, string>;
-}
-
-export interface AutomationEdge {
-  from: string;
-  to: string;
-}
-
-export interface AutomationGraph {
-  nodes: AutomationNode[];
-  edges: AutomationEdge[];
-  /** Last saved pan/zoom. Carried through unchanged by the builder for now. */
-  viewport?: { pan: { x: number; y: number }; zoom: number } | null;
-}
+export type {
+  AutomationNodeType,
+  AutomationNode,
+  AutomationEdge,
+  AutomationGraph,
+} from "@/lib/api";
 
 export const NODE_META: Record<
   AutomationNodeType,

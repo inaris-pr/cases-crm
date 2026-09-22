@@ -503,6 +503,28 @@ describe("graph persistence and validation", () => {
     expect(body.name).toBe("Padded");
   });
 
+  it("accepts and round-trips an explicitly null viewport", async () => {
+    // EMPTY_GRAPH on the client is { nodes: [], edges: [], viewport: null },
+    // so this is the exact shape the Case Automations tab posts and patches.
+    const created = (
+      await request(app)
+        .post("/api/cases/1/automations")
+        .set(asMe)
+        .send({ name: "Null viewport", graph: { nodes: [], edges: [], viewport: null } })
+        .expect(201)
+    ).body;
+    expect(created.graph.viewport).toBeNull();
+
+    const patched = (
+      await request(app)
+        .patch(`/api/automations/${created.id}`)
+        .set(asMe)
+        .send({ graph: { nodes: [], edges: [], viewport: null } })
+        .expect(200)
+    ).body;
+    expect(patched.graph.viewport).toBeNull();
+  });
+
   it("accepts an empty graph as a work in progress", async () => {
     await request(app)
       .post("/api/cases/1/automations")
