@@ -1,13 +1,18 @@
 # CASES.
 
-A premium, dark-mode SaaS case management platform.
+A premium, dark-mode case-management platform for a U.S. entity formation
+practice — leads, companies, the people behind them, and the matters in flight.
+
+> **New here?** `CLAUDE_HANDOFF.md` is the state of the project: what works,
+> what is a prototype, and what is deliberately unfinished. `CLAUDE.md` is the
+> working guide for the codebase.
 
 ## Stack
 
-- **Frontend** — React 19 + Vite + TypeScript, Tailwind v4, Framer Motion, Wouter, TanStack Query, Lucide, Recharts
-- **Backend** — Node 20 + Express 5 + TypeScript, Pino logging, esbuild. Uses an in-memory store seeded at boot, so no database is required to run the app.
-- **Database (optional)** — A complete Drizzle/PostgreSQL schema lives in `lib/db/` for when you're ready to switch. The API server is structured so swapping is a one-file change.
-- **API contract** — OpenAPI 3.1 in `lib/api-spec/openapi.yaml`. Orval can generate typed React Query hooks into `lib/api-client-react/`.
+- **Frontend** — React 19 + Vite 5 + TypeScript, Tailwind v4 (beta), Framer
+  Motion, Wouter, TanStack Query, Lucide, Recharts
+- **Backend** — Node 20+ / Express 5 / TypeScript, Zod validation, Pino
+  logging, esbuild for builds. No database required.
 - **Monorepo** — pnpm workspaces
 
 ## Workspace layout
@@ -15,58 +20,88 @@ A premium, dark-mode SaaS case management platform.
 ```
 cases-app/
 ├─ artifacts/
-│  ├─ cases/         # React + Vite frontend
-│  └─ api-server/    # Express backend (in-memory store)
+│  ├─ cases/         React + Vite frontend
+│  └─ api-server/    Express backend + JSON-backed store
 └─ lib/
-   ├─ db/                # Drizzle schema + seed (optional Postgres backend)
-   ├─ api-spec/          # OpenAPI 3.1 YAML
-   └─ api-client-react/  # Orval output (typed React Query hooks)
+   ├─ db/                Drizzle/Postgres schema — stale, not wired up
+   ├─ api-spec/          OpenAPI 3.1 — stale, covers ~25% of the API
+   └─ api-client-react/  Orval target — never generated
 ```
+
+The three `lib/` packages predate the current data model and are **not** in the
+running path. See CLAUDE_HANDOFF.md §6.4 before touching them.
 
 ## First run
 
-You only need **Node 20+** and **pnpm**.
+You need **Node 20+** and **pnpm 9**.
 
-If you don't have pnpm yet, in PowerShell run:
+```bash
+cd cases-app
 
-```powershell
-npm install -g pnpm
-```
+corepack enable
+corepack prepare pnpm@9.0.0 --activate   # the version this repo pins
 
-Then:
-
-```powershell
-cd C:\Users\IrisBurgos\Desktop\CRM\cases-app
-pnpm install
+pnpm install --frozen-lockfile
 pnpm dev
 ```
 
-This starts the API on `http://localhost:3001` and the Vite dev server on `http://localhost:5173`. Open `http://localhost:5173` in your browser. The app comes pre-loaded with 5 customers, 5 cases across every status/priority, 9 tasks, 4 documents, and 2 message threads.
+That starts the API on `http://localhost:3001` and Vite on
+`http://localhost:5173`. Open the Vite URL.
 
-> The in-memory store resets every time you restart the API. That's intentional — keep iterating on the UI without worrying about migrations. When you're ready to persist, see "Switching to Postgres" below.
+Sign in with any of the seeded users — password `test123` for all three:
+
+| Email | Role |
+|---|---|
+| `iris@example.com` | admin |
+| `devon@example.com` | case manager |
+| `sara@example.com` | case manager |
+
+> Coming from another machine? `node_modules` is platform-specific. Delete it
+> and reinstall rather than copying it across.
 
 ## Scripts
 
 | Command | What it does |
 |---|---|
-| `pnpm dev` | Runs the frontend and API in parallel |
-| `pnpm dev:api` | API server only |
+| `pnpm dev` | Frontend and API in parallel |
+| `pnpm dev:api` | API only |
 | `pnpm dev:web` | Frontend only |
-| `pnpm api:generate` | Regenerate `lib/api-client-react` from the OpenAPI spec via Orval |
+| `pnpm typecheck` | TypeScript across the workspace — currently clean |
 | `pnpm build` | Production builds for everything |
-| `pnpm typecheck` | TypeScript across the workspace |
+| `pnpm api:generate` | Orval regen — **don't**, the spec it reads is stale |
+
+There are no tests and no lint step (`pnpm lint` is a no-op).
+
+## Data
+
+The API keeps everything in memory and persists the whole store to
+`artifacts/api-server/data/store.json` after every successful write.
+
+- The file **survives restarts**. It is git-ignored.
+- To reset to the demo dataset, delete it and restart the API — the seed in
+  `artifacts/api-server/src/store.ts` re-runs.
+- `store.snapshot.json` beside it is a committed restore point. Copy it over
+  `store.json` and restart to return to the recovered state.
+
+Seeded content: 17 companies, 21 contacts, 8 leads, 15 cases across every
+status and priority, 65 tasks, 12 documents, 15 logged interactions, and a
+team message thread. Everything is fictional.
 
 ## Switching to Postgres
 
-The Drizzle schema and seed in `lib/db/` mirror the in-memory store exactly. To switch:
-
-1. Install Postgres and create a database (e.g. `cases`).
-2. Add `DATABASE_URL` to `.env`.
-3. From `lib/db/`, run `pnpm drizzle-kit push` and `pnpm seed`.
-4. In `artifacts/api-server/src/routes.ts`, swap the `./store.js` imports for `@cases/db` and convert the array operations to Drizzle queries (the file already follows that shape).
+`lib/db/` holds a Drizzle schema **written against the previous data model**.
+It has no tables for accounts, contacts, account-contact links, leads, users,
+case interactions, thread entries or mentions — roughly half the live domain —
+and no migrations have been generated. Switching is a real project, not a
+configuration change. Rewrite the schema first.
 
 ## Notes
 
-- The Messages experience lives entirely in the floating widget that sits in `AppLayout` on every page. The `/messages` route exists for a roomier full-page version but is not in the sidebar nav.
-- API base URL is computed as `import.meta.env.BASE_URL + /api/...` so the app works behind a sub-path proxy.
-- Vite dev server binds `0.0.0.0` and reads `PORT` from env so it works in cloud IDEs.
+- Messages live in the floating widget that `AppLayout` renders on every page.
+  The `/messages` route is a roomier full-page version, intentionally absent
+  from the sidebar.
+- The API base URL is `import.meta.env.BASE_URL + /api/...`, so the app works
+  behind a sub-path proxy.
+- Vite binds `0.0.0.0` and reads `VITE_PORT`/`PORT`, so it works in cloud IDEs.
+- Auth is a demo: plaintext passwords, an `X-User` header the server trusts,
+  and no protected routes. Don't expose this to a network you don't control.
