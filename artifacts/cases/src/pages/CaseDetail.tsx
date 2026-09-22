@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useParams, Link } from "wouter";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -40,6 +40,8 @@ import { StatusBadge, PriorityBadge, TaskStatusBadge } from "@/components/ui/Bad
 import { Button } from "@/components/ui/Button";
 import { Input, Label, Select, Textarea } from "@/components/ui/Input";
 import { Avatar } from "@/components/ui/Avatar";
+import { Modal } from "@/components/ui/Modal";
+import { CaseAutomationsTab } from "@/components/automations/CaseAutomationsTab";
 import { MentionBody, MentionTextarea } from "@/components/MentionInput";
 import { useMyName } from "@/lib/auth";
 import { cn } from "@/lib/cn";
@@ -55,13 +57,17 @@ const CHANNEL_META: Record<ContactChannel, { label: string; icon: any; color: st
   other: { label: "Other", icon: MessageSquare, color: "#94a3b8" },
 };
 
-type Tab = "overview" | "contacts" | "thread" | "workflow" | "tasks" | "documents";
+type Tab = "overview" | "contacts" | "thread" | "tasks" | "documents" | "automations";
 
-const VALID_TABS: Tab[] = ["overview", "contacts", "thread", "workflow", "tasks", "documents"];
+const VALID_TABS: Tab[] = ["overview", "contacts", "thread", "tasks", "documents", "automations"];
+
+/** Retired tab ids, so older deep links still land somewhere sensible. */
+const TAB_ALIASES: Record<string, Tab> = { workflow: "automations" };
 
 function initialTabFromHash(): Tab {
   if (typeof window === "undefined") return "overview";
   const h = window.location.hash.replace(/^#/, "").toLowerCase();
+  if (h in TAB_ALIASES) return TAB_ALIASES[h];
   return (VALID_TABS as string[]).includes(h) ? (h as Tab) : "overview";
 }
 
@@ -72,10 +78,41 @@ export function CaseDetail() {
   const [tab, setTab] = useState<Tab>(initialTabFromHash);
   const [editing, setEditing] = useState(false);
 
+  // The Automations tab edits a graph that is only persisted on Save, so
+  // leaving it with unsaved work needs a confirmation. CaseAutomationsTab
+  // reports its own dirty state because it cannot see the tab strip; the
+  // component guards page unload itself.
+  const [automationsDirty, setAutomationsDirty] = useState(false);
+  const [pendingTab, setPendingTab] = useState<Tab | null>(null);
+  const blockingRef = useRef(false);
+  blockingRef.current = tab === "automations" && automationsDirty;
+
+  function requestTab(next: Tab) {
+    if (next === tab) return;
+    if (blockingRef.current) {
+      setPendingTab(next);
+      return;
+    }
+    if (tab === "automations") setAutomationsDirty(false);
+    setTab(next);
+  }
+
+  function discardAndSwitchTab() {
+    if (pendingTab !== null) {
+      setAutomationsDirty(false);
+      setTab(pendingTab);
+    }
+    setPendingTab(null);
+  }
+
   // Re-sync the tab if the user hits the back/forward button or another
   // dashboard link pushes a different hash.
   useEffect(() => {
-    const onHashChange = () => setTab(initialTabFromHash());
+    const onHashChange = () => {
+      const next = initialTabFromHash();
+      if (blockingRef.current) setPendingTab(next);
+      else setTab(next);
+    };
     window.addEventListener("hashchange", onHashChange);
     return () => window.removeEventListener("hashchange", onHashChange);
   }, []);
@@ -168,41 +205,42 @@ export function CaseDetail() {
 
       {/* Tabs */}
       <div className="flex items-center gap-1 border-b border-white/5 overflow-x-auto">
-        <TabBtn active={tab === "overview"} onClick={() => setTab("overview")} icon={Layers}>
+        <TabBtn active={tab === "overview"} onClick={() => requestTab("overview")} icon={Layers}>
           Overview
         </TabBtn>
-        <TabBtn active={tab === "contacts"} onClick={() => setTab("contacts")} icon={Phone}>
+        <TabBtn active={tab === "contacts"} onClick={() => requestTab("contacts")} icon={Phone}>
           Contacts
           {(contactsQ.data?.length ?? 0) > 0 && (
             <span className="text-white/40 ml-1.5 text-[11px]">{contactsQ.data!.length}</span>
           )}
         </TabBtn>
-        <TabBtn active={tab === "thread"} onClick={() => setTab("thread")} icon={MessageSquare}>
+        <TabBtn active={tab === "thread"} onClick={() => requestTab("thread")} icon={MessageSquare}>
           Thread
           {(threadQ.data?.length ?? 0) > 0 && (
             <span className="text-white/40 ml-1.5 text-[11px]">{threadQ.data!.length}</span>
           )}
         </TabBtn>
-        <TabBtn active={tab === "workflow"} onClick={() => setTab("workflow")} icon={WorkflowIcon}>
-          Workflow
-        </TabBtn>
-        <TabBtn active={tab === "tasks"} onClick={() => setTab("tasks")} icon={ListTodo}>
+        <TabBtn active={tab === "tasks"} onClick={() => requestTab("tasks")} icon={ListTodo}>
           Tasks
           {c.tasks.length > 0 && (
             <span className="text-white/40 ml-1.5 text-[11px]">{c.tasks.length}</span>
           )}
         </TabBtn>
-        <TabBtn active={tab === "documents"} onClick={() => setTab("documents")} icon={FileText}>
+        <TabBtn active={tab === "documents"} onClick={() => requestTab("documents")} icon={FileText}>
           Documents
           {c.documents.length > 0 && (
             <span className="text-white/40 ml-1.5 text-[11px]">{c.documents.length}</span>
           )}
         </TabBtn>
+        <TabBtn active={tab === "automations"} onClick={() => requestTab("automations")} icon={WorkflowIcon}>
+          Automations
+        </TabBtn>
       </div>
 
-      {/* Content */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        <div className="lg:col-span-2 space-y-5">
+      {/* Content. The automation workspace takes the full case width — the
+          builder canvas is unusable squeezed beside the details card. */}
+      <div className={cn("grid grid-cols-1 gap-4", tab !== "automations" && "lg:grid-cols-3")}>
+        <div className={cn("space-y-5", tab !== "automations" && "lg:col-span-2")}>
           {tab === "overview" && (
             <OverviewTab
               caseDetail={c}
@@ -224,16 +262,37 @@ export function CaseDetail() {
               loading={threadQ.isLoading}
             />
           )}
-          {tab === "workflow" && <WorkflowTab />}
           {tab === "tasks" && <TasksTab caseDetail={c} />}
           {tab === "documents" && <DocumentsTab caseDetail={c} />}
+          {tab === "automations" && (
+            <CaseAutomationsTab caseId={c.id} onDirtyChange={setAutomationsDirty} />
+          )}
         </div>
 
-        {/* Details sidebar */}
-        <div className="lg:col-span-1">
-          <DetailsCard caseDetail={c} onChangeStatus={(s) => patchCase.mutate({ status: s })} onChangePriority={(p) => patchCase.mutate({ priority: p })} />
-        </div>
+        {/* Details sidebar — every tab except the automation workspace. */}
+        {tab !== "automations" && (
+          <div className="lg:col-span-1">
+            <DetailsCard caseDetail={c} onChangeStatus={(s) => patchCase.mutate({ status: s })} onChangePriority={(p) => patchCase.mutate({ priority: p })} />
+          </div>
+        )}
       </div>
+
+      <Modal
+        open={pendingTab !== null}
+        onClose={() => setPendingTab(null)}
+        title="Discard unsaved changes?"
+        description="This automation has edits that have not been saved. Leaving the Automations tab will lose them."
+        widthClass="max-w-md"
+      >
+        <div className="flex justify-end gap-2">
+          <Button variant="outline" onClick={() => setPendingTab(null)}>
+            Keep editing
+          </Button>
+          <Button variant="danger" onClick={discardAndSwitchTab}>
+            Discard and leave
+          </Button>
+        </div>
+      </Modal>
     </div>
   );
 }
@@ -423,26 +482,6 @@ function DetailsCard({
 }
 
 // ── Workflow tab ────────────────────────────────────────────────────────────
-function WorkflowTab() {
-  return (
-    <div className="rounded-xl border border-white/8 bg-white/[0.025] p-10 text-center">
-      <div className="size-12 rounded-2xl bg-white/5 grid place-items-center text-white/40 mx-auto mb-3">
-        <WorkflowIcon size={20} />
-      </div>
-      <h3 className="text-base font-semibold mb-1">No automation linked yet</h3>
-      <p className="text-sm text-white/50 mb-4 max-w-sm mx-auto">
-        Link this case to an automation in the Automations builder to auto-progress its workflow.
-      </p>
-      <Link href="/workflow">
-        <a className="inline-flex items-center gap-1.5 h-9 px-4 rounded-lg bg-[var(--color-primary)] text-[var(--color-primary-foreground)] text-sm font-semibold">
-          Open Automations
-          <ExternalLink size={13} />
-        </a>
-      </Link>
-    </div>
-  );
-}
-
 // ── Contacts ────────────────────────────────────────────────────────────────
 function ContactsTab({
   caseId,
