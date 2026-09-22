@@ -26,6 +26,7 @@ import {
   accountsForContact,
   primaryContactForAccount,
   makeAccount,
+  nextAutomationId,
   type Case,
   type CasePriority,
   type CaseStatus,
@@ -35,6 +36,8 @@ import {
   type Account,
   type Lead,
   type AccountContactLink,
+  type Automation,
+  type AutomationGraph,
 } from "./store.js";
 
 // Seed once at startup.
@@ -56,6 +59,75 @@ const docType = z.enum(["contract", "invoice", "report", "identity", "other"]);
 const conversationType = z.enum(["dm", "group"]);
 const leadStatus = z.enum(["new", "working", "qualified", "unqualified", "converted"]);
 const leadSource = z.enum(["referral", "website", "event", "cold_call", "partner", "other"]);
+
+// ── Automation schemas ───────────────────────────────────────────────────────
+const automationNodeType = z.enum([
+  "trigger", "filter", "assign", "notify", "delay", "branch", "http", "update",
+]);
+
+const automationNodeSchema = z.object({
+  id: z.string().min(1),
+  type: automationNodeType,
+  x: z.number().finite(),
+  y: z.number().finite(),
+  config: z.record(z.string()),
+});
+
+const automationEdgeSchema = z.object({
+  from: z.string().min(1),
+  to: z.string().min(1),
+});
+
+/**
+ * A workflow graph. Structural validation only: node ids unique, every edge
+ * endpoint resolves to a node. Cycles are allowed — there is no execution
+ * engine yet, and a half-built graph is a legitimate thing to save.
+ */
+const automationGraphSchema = z
+  .object({
+    nodes: z.array(automationNodeSchema),
+    edges: z.array(automationEdgeSchema),
+    viewport: z
+      .object({
+        pan: z.object({ x: z.number().finite(), y: z.number().finite() }),
+        zoom: z.number().finite().positive(),
+      })
+      .nullable()
+      .optional(),
+  })
+  .superRefine((graph, ctx) => {
+    const ids = new Set<string>();
+    for (const [i, n] of graph.nodes.entries()) {
+      if (ids.has(n.id)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["nodes", i, "id"],
+          message: `duplicate node id: ${n.id}`,
+        });
+      }
+      ids.add(n.id);
+    }
+    for (const [i, e] of graph.edges.entries()) {
+      if (!ids.has(e.from)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["edges", i, "from"],
+          message: `edge references unknown node: ${e.from}`,
+        });
+      }
+      if (!ids.has(e.to)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["edges", i, "to"],
+          message: `edge references unknown node: ${e.to}`,
+        });
+      }
+    }
+  });
+
+const automationName = z.string().trim().min(1).max(80);
+
+const EMPTY_GRAPH: AutomationGraph = { nodes: [], edges: [], viewport: null };
 
 /**
  * Returns the case with its account, primary contact, and a synthesized
@@ -1122,6 +1194,300 @@ export function registerRoutes(app: Express) {
     "/team",
     asyncHandler(async (_req, res) => {
       res.json(TEAM_MEMBERS);
+    }),
+  );
+
+  // ── Automations ────────────────────────────────────────────────────────────
+  // Scope model (see store.ts): a global automation is ONE row offered to every
+  // case by union at read time. A case that forks a global gets its own copy and
+  // the original is hidden from that case only.
+
+  /** Global ids this case has forked, and which are therefore hidden from it. */
+  function forkedGlobalIds(caseId: number): Set<number> {
+    return new Set(
+      store.automations
+        .filter(
+          (a) =>
+            a.scope === "case" &&
+            a.caseId === caseId &&
+            a.derivedFromAutomationId !== null,
+        )
+        .map((a) => a.derivedFromAutomationId as number),
+    );
+  }
+
+  /**
+   * What this case can actually see: every global it has not customised, plus
+   * everything it owns. Nothing is written to produce this list, which is why a
+   * case created tomorrow already has today's globals.
+   */
+  function effectiveAutomationsForCase(caseId: number): Automation[] {
+    const hidden = forkedGlobalIds(caseId);
+    const byName = (a: Automation, b: Automation) => a.name.localeCompare(b.name);
+    const globals = store.automations
+      .filter((a) => a.scope === "global" && !hidden.has(a.id))
+      .sort(byName);
+    const own = store.automations
+      .filter((a) => a.scope === "case" && a.caseId === caseId)
+      .sort(byName);
+    return [...globals, ...own];
+  }
+
+  /** List shape: the graph is omitted, and the UI-facing flags are derived. */
+  function automationSummary(a: Automation) {
+    const { graph, ...rest } = a;
+    return {
+      ...rest,
+      nodeCount: graph.nodes.length,
+      edgeCount: graph.edges.length,
+      /** Reaches the case through the global union rather than being owned by it. */
+      inherited: a.scope === "global",
+      /** A case-scoped row standing in for a global. */
+      customized: a.scope === "case" && a.derivedFromAutomationId !== null,
+    };
+  }
+
+  /** Blast radius, for the confirmation dialogs. */
+  function automationUsage(a: Automation) {
+    if (a.scope === "case") {
+      return { scope: a.scope, caseCount: 1, forkedByCaseCount: 0 };
+    }
+    const forks = store.automations.filter(
+      (x) => x.scope === "case" && x.derivedFromAutomationId === a.id,
+    ).length;
+    return {
+      scope: a.scope,
+      caseCount: Math.max(store.cases.length - forks, 0),
+      forkedByCaseCount: forks,
+    };
+  }
+
+  function findAutomation(id: number): Automation | undefined {
+    return store.automations.find((a) => a.id === id);
+  }
+
+  function touch(a: Automation, me: string) {
+    a.updatedAt = new Date().toISOString();
+    a.lastModifiedByName = me;
+  }
+
+  const autoIdParam = z.object({ autoId: z.coerce.number().int().positive() });
+
+  /** Everything this case can see, globals first, each group by name. */
+  r.get(
+    "/cases/:id/automations",
+    asyncHandler(async (req, res) => {
+      const { id } = idParam.parse(req.params);
+      if (!findCaseFor(req, id)) return res.status(404).json({ error: "case_not_found" });
+      res.json(effectiveAutomationsForCase(id).map(automationSummary));
+    }),
+  );
+
+  /** Create an automation owned by this case. */
+  r.post(
+    "/cases/:id/automations",
+    asyncHandler(async (req, res) => {
+      const { id } = idParam.parse(req.params);
+      if (!findCaseFor(req, id)) return res.status(404).json({ error: "case_not_found" });
+      const body = z
+        .object({
+          name: automationName,
+          graph: automationGraphSchema.optional(),
+          enabled: z.boolean().optional(),
+        })
+        .parse(req.body);
+      const me = currentUser(req) ?? "Iris Burgos";
+      const now = new Date().toISOString();
+      const created: Automation = {
+        id: nextAutomationId(),
+        name: body.name,
+        scope: "case",
+        caseId: id,
+        graph: body.graph ?? EMPTY_GRAPH,
+        enabled: body.enabled ?? true,
+        derivedFromAutomationId: null,
+        originCaseId: null,
+        ownerName: me,
+        createdAt: now,
+        createdByName: me,
+        updatedAt: now,
+        lastModifiedByName: me,
+      };
+      store.automations.push(created);
+      res.status(201).json(created);
+    }),
+  );
+
+  /** Global library listing, for admin surfaces. */
+  r.get(
+    "/automations",
+    asyncHandler(async (req, res) => {
+      const q = z.object({ scope: z.enum(["case", "global"]).optional() }).parse(req.query);
+      const rows = store.automations
+        .filter((a) => (q.scope ? a.scope === q.scope : true))
+        .sort((a, b) => a.name.localeCompare(b.name));
+      res.json(rows.map(automationSummary));
+    }),
+  );
+
+  /** One automation, graph included. */
+  r.get(
+    "/automations/:autoId",
+    asyncHandler(async (req, res) => {
+      const { autoId } = autoIdParam.parse(req.params);
+      const a = findAutomation(autoId);
+      if (!a) return res.status(404).json({ error: "not_found" });
+      res.json(a);
+    }),
+  );
+
+  /** How many cases an edit or delete would reach. */
+  r.get(
+    "/automations/:autoId/usage",
+    asyncHandler(async (req, res) => {
+      const { autoId } = autoIdParam.parse(req.params);
+      const a = findAutomation(autoId);
+      if (!a) return res.status(404).json({ error: "not_found" });
+      res.json(automationUsage(a));
+    }),
+  );
+
+  /** Rename, re-graph or enable/disable. Scope is changed elsewhere. */
+  r.patch(
+    "/automations/:autoId",
+    asyncHandler(async (req, res) => {
+      const { autoId } = autoIdParam.parse(req.params);
+      const a = findAutomation(autoId);
+      if (!a) return res.status(404).json({ error: "not_found" });
+      const body = z
+        .object({
+          name: automationName.optional(),
+          graph: automationGraphSchema.optional(),
+          enabled: z.boolean().optional(),
+        })
+        .parse(req.body);
+      if (body.name !== undefined) a.name = body.name;
+      if (body.graph !== undefined) a.graph = body.graph;
+      if (body.enabled !== undefined) a.enabled = body.enabled;
+      touch(a, currentUser(req) ?? a.ownerName);
+      res.json(a);
+    }),
+  );
+
+  /**
+   * Delete. Removing a global removes it from every case at once; any
+   * case-scoped fork of it survives as an independent automation, with its
+   * now-dangling provenance pointer cleared.
+   */
+  r.delete(
+    "/automations/:autoId",
+    asyncHandler(async (req, res) => {
+      const { autoId } = autoIdParam.parse(req.params);
+      const idx = store.automations.findIndex((a) => a.id === autoId);
+      if (idx === -1) return res.status(404).json({ error: "not_found" });
+      const [removed] = store.automations.splice(idx, 1);
+      if (removed.scope === "global") {
+        for (const other of store.automations) {
+          if (other.derivedFromAutomationId === removed.id) {
+            other.derivedFromAutomationId = null;
+          }
+        }
+      }
+      res.status(204).end();
+    }),
+  );
+
+  /**
+   * "Apply to all cases" — promote a case automation to global, in place.
+   * Promoting rather than copying keeps one row, so the originating case does
+   * not end up editing a private twin of the shared automation.
+   */
+  r.post(
+    "/automations/:autoId/promote",
+    asyncHandler(async (req, res) => {
+      const { autoId } = autoIdParam.parse(req.params);
+      const a = findAutomation(autoId);
+      if (!a) return res.status(404).json({ error: "not_found" });
+      if (a.scope === "global") {
+        return res.status(409).json({ error: "already_global" });
+      }
+      a.originCaseId = a.caseId;
+      a.caseId = null;
+      a.scope = "global";
+      touch(a, currentUser(req) ?? a.ownerName);
+      res.json(a);
+    }),
+  );
+
+  /**
+   * "Customize for this case" — copy a global into one case. The copy carries
+   * derivedFromAutomationId, which hides the original from that case only.
+   * Every other case keeps the shared original, and later edits to the global
+   * do not reach this copy.
+   */
+  r.post(
+    "/automations/:autoId/fork",
+    asyncHandler(async (req, res) => {
+      const { autoId } = autoIdParam.parse(req.params);
+      const source = findAutomation(autoId);
+      if (!source) return res.status(404).json({ error: "not_found" });
+      const body = z
+        .object({ caseId: z.number().int().positive(), name: automationName.optional() })
+        .parse(req.body);
+      if (source.scope !== "global") {
+        return res.status(409).json({ error: "not_global" });
+      }
+      if (!findCaseFor(req, body.caseId)) {
+        return res.status(404).json({ error: "case_not_found" });
+      }
+      if (forkedGlobalIds(body.caseId).has(source.id)) {
+        return res.status(409).json({ error: "already_customized" });
+      }
+      const me = currentUser(req) ?? "Iris Burgos";
+      const now = new Date().toISOString();
+      const copy: Automation = {
+        id: nextAutomationId(),
+        name: body.name ?? `${source.name} (this case)`,
+        scope: "case",
+        caseId: body.caseId,
+        // Deep clone: the fork must not share structure with the global.
+        graph: JSON.parse(JSON.stringify(source.graph)) as AutomationGraph,
+        enabled: source.enabled,
+        derivedFromAutomationId: source.id,
+        originCaseId: null,
+        ownerName: me,
+        createdAt: now,
+        createdByName: me,
+        updatedAt: now,
+        lastModifiedByName: me,
+      };
+      store.automations.push(copy);
+      res.status(201).json(copy);
+    }),
+  );
+
+  /**
+   * "Revert to global" — discard a customised copy and let the case inherit the
+   * original again. Destructive for the copy, untouched for the global.
+   */
+  r.post(
+    "/automations/:autoId/revert",
+    asyncHandler(async (req, res) => {
+      const { autoId } = autoIdParam.parse(req.params);
+      const fork = findAutomation(autoId);
+      if (!fork) return res.status(404).json({ error: "not_found" });
+      if (fork.scope !== "case" || fork.derivedFromAutomationId === null) {
+        return res.status(409).json({ error: "not_customized" });
+      }
+      const original = findAutomation(fork.derivedFromAutomationId);
+      if (!original) {
+        // The global was deleted after the fork was made; there is nothing to
+        // revert to, so the copy is all the case has. Refuse rather than
+        // silently destroying it.
+        return res.status(409).json({ error: "original_deleted" });
+      }
+      store.automations.splice(store.automations.indexOf(fork), 1);
+      res.json({ restored: automationSummary(original) });
     }),
   );
 
