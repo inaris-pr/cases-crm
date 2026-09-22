@@ -1,0 +1,36 @@
+# Dependencies
+node_modules
+
+# Build output
+dist
+*.tsbuildinfo
+.turbo
+.vite
+.cache
+coverage
+
+# Environment / secrets
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+_tmp_3_*
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Runtime persisted store.
+#
+# artifacts/api-server/data/store.json is rewritten by the API server on every
+# mutating request, so it is deliberately NOT tracked — it would dirty the
+# working tree constantly.
+#
+# store.snapshot.json is the committed point-in-time restore copy (see
+# CLAUDE_HANDOFF.md). To restore: copy it over store.json and restart the API.
+# ─────────────────────────────────────────────────────────────────────────────
+artifacts/api-server/data/*
+!artifacts/api-server/data/store.snapshot.json

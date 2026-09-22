@@ -1,0 +1,27 @@
+{
+  "name": "cases-app",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Cases — a premium dark-mode SaaS case management platform",
+  "packageManager": "pnpm@9.0.0",
+  "scripts": {
+    "dev": "pnpm -r --parallel --filter=./artifacts/* run dev",
+    "dev:api": "pnpm --filter @cases/api-server dev",
+    "dev:web": "pnpm --filter @cases/cases dev",
+    "build": "pnpm -r run build",
+    "api:generate": "pnpm --filter @cases/api-client-react generate",
+    "lint": "echo 'no-op'",
+    "typecheck": "pnpm -r run typecheck"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "pnpm": {
+    "overrides": {
+      "esbuild": "0.21.5"
+    }
+  }
+}

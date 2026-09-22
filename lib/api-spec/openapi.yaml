@@ -1,0 +1,474 @@
+openapi: 3.1.0
+info:
+  title: Cases API
+  version: 0.1.0
+  description: HTTP contract for the Cases case-management platform.
+servers:
+  - url: /
+paths:
+  /healthz:
+    get:
+      operationId: getHealth
+      tags: [system]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Health" } } } }
+
+  /api/cases:
+    get:
+      operationId: listCases
+      tags: [cases]
+      parameters:
+        - in: query
+          name: status
+          schema: { $ref: "#/components/schemas/CaseStatus" }
+        - in: query
+          name: priority
+          schema: { $ref: "#/components/schemas/CasePriority" }
+        - in: query
+          name: search
+          schema: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/CaseWithCustomer" }
+    post:
+      operationId: createCase
+      tags: [cases]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/NewCaseInput" }
+      responses:
+        "201":
+          description: Created
+          content: { application/json: { schema: { $ref: "#/components/schemas/Case" } } }
+
+  /api/cases/{id}:
+    get:
+      operationId: getCase
+      tags: [cases]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+      responses:
+        "200":
+          description: OK
+          content: { application/json: { schema: { $ref: "#/components/schemas/CaseDetail" } } }
+        "404": { description: Not Found }
+    patch:
+      operationId: updateCase
+      tags: [cases]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateCaseInput" }
+      responses:
+        "200":
+          description: OK
+          content: { application/json: { schema: { $ref: "#/components/schemas/Case" } } }
+
+  /api/customers:
+    get:
+      operationId: listCustomers
+      tags: [customers]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/CustomerWithCounts" } }
+    post:
+      operationId: createCustomer
+      tags: [customers]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/NewCustomerInput" }
+      responses:
+        "201":
+          description: Created
+          content: { application/json: { schema: { $ref: "#/components/schemas/Customer" } } }
+
+  /api/tasks:
+    get:
+      operationId: listTasks
+      tags: [tasks]
+      parameters:
+        - in: query
+          name: caseId
+          schema: { type: integer }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/Task" } }
+    post:
+      operationId: createTask
+      tags: [tasks]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/NewTaskInput" }
+      responses:
+        "201":
+          description: Created
+          content: { application/json: { schema: { $ref: "#/components/schemas/Task" } } }
+
+  /api/tasks/{id}:
+    patch:
+      operationId: updateTask
+      tags: [tasks]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateTaskInput" }
+      responses:
+        "200":
+          description: OK
+          content: { application/json: { schema: { $ref: "#/components/schemas/Task" } } }
+
+  /api/documents:
+    get:
+      operationId: listDocuments
+      tags: [documents]
+      parameters:
+        - in: query
+          name: caseId
+          schema: { type: integer }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/Document" } }
+    post:
+      operationId: createDocument
+      tags: [documents]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/NewDocumentInput" }
+      responses:
+        "201":
+          description: Created
+          content: { application/json: { schema: { $ref: "#/components/schemas/Document" } } }
+
+  /api/stats:
+    get:
+      operationId: getStats
+      tags: [stats]
+      responses:
+        "200":
+          description: OK
+          content: { application/json: { schema: { $ref: "#/components/schemas/Stats" } } }
+
+  /api/conversations:
+    get:
+      operationId: listConversations
+      tags: [messages]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/ConversationWithPreview" } }
+    post:
+      operationId: createConversation
+      tags: [messages]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/NewConversationInput" }
+      responses:
+        "201":
+          description: Created
+          content: { application/json: { schema: { $ref: "#/components/schemas/Conversation" } } }
+
+  /api/conversations/{id}/messages:
+    get:
+      operationId: listMessages
+      tags: [messages]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/Message" } }
+    post:
+      operationId: sendMessage
+      tags: [messages]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/NewMessageInput" }
+      responses:
+        "201":
+          description: Created
+          content: { application/json: { schema: { $ref: "#/components/schemas/Message" } } }
+
+  /api/messages/{id}:
+    delete:
+      operationId: deleteMessage
+      tags: [messages]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [senderName]
+              properties:
+                senderName: { type: string }
+      responses:
+        "204": { description: Deleted }
+        "403": { description: Not the author }
+
+components:
+  schemas:
+    Health:
+      type: object
+      properties:
+        status: { type: string }
+        timestamp: { type: string }
+    CaseStatus:
+      type: string
+      enum: [intake, review, in_progress, waiting, completed]
+    CasePriority:
+      type: string
+      enum: [low, medium, high, critical]
+    TaskStatus:
+      type: string
+      enum: [pending, in_progress, completed]
+    DocumentType:
+      type: string
+      enum: [contract, invoice, report, identity, other]
+    ConversationType:
+      type: string
+      enum: [dm, group]
+    Customer:
+      type: object
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        email: { type: string }
+        phone: { type: string, nullable: true }
+        company: { type: string, nullable: true }
+        createdAt: { type: string }
+    CustomerWithCounts:
+      allOf:
+        - $ref: "#/components/schemas/Customer"
+        - type: object
+          properties:
+            caseCount: { type: integer }
+    NewCustomerInput:
+      type: object
+      required: [name, email]
+      properties:
+        name: { type: string }
+        email: { type: string }
+        phone: { type: string }
+        company: { type: string }
+    Case:
+      type: object
+      properties:
+        id: { type: integer }
+        caseNumber: { type: string }
+        title: { type: string }
+        customerId: { type: integer }
+        status: { $ref: "#/components/schemas/CaseStatus" }
+        priority: { $ref: "#/components/schemas/CasePriority" }
+        description: { type: string, nullable: true }
+        tags: { type: array, items: { type: string } }
+        createdAt: { type: string }
+        updatedAt: { type: string }
+    CaseWithCustomer:
+      allOf:
+        - $ref: "#/components/schemas/Case"
+        - type: object
+          properties:
+            customer: { $ref: "#/components/schemas/Customer" }
+    CaseDetail:
+      allOf:
+        - $ref: "#/components/schemas/CaseWithCustomer"
+        - type: object
+          properties:
+            tasks: { type: array, items: { $ref: "#/components/schemas/Task" } }
+            documents: { type: array, items: { $ref: "#/components/schemas/Document" } }
+    NewCaseInput:
+      type: object
+      required: [title, customerId]
+      properties:
+        title: { type: string }
+        customerId: { type: integer }
+        status: { $ref: "#/components/schemas/CaseStatus" }
+        priority: { $ref: "#/components/schemas/CasePriority" }
+        description: { type: string }
+        tags: { type: array, items: { type: string } }
+    UpdateCaseInput:
+      type: object
+      properties:
+        title: { type: string }
+        status: { $ref: "#/components/schemas/CaseStatus" }
+        priority: { $ref: "#/components/schemas/CasePriority" }
+        description: { type: string }
+        tags: { type: array, items: { type: string } }
+    Task:
+      type: object
+      properties:
+        id: { type: integer }
+        caseId: { type: integer }
+        title: { type: string }
+        description: { type: string, nullable: true }
+        status: { $ref: "#/components/schemas/TaskStatus" }
+        dueDate: { type: string, nullable: true }
+        createdAt: { type: string }
+    NewTaskInput:
+      type: object
+      required: [caseId, title]
+      properties:
+        caseId: { type: integer }
+        title: { type: string }
+        description: { type: string }
+        status: { $ref: "#/components/schemas/TaskStatus" }
+        dueDate: { type: string }
+    UpdateTaskInput:
+      type: object
+      properties:
+        title: { type: string }
+        description: { type: string }
+        status: { $ref: "#/components/schemas/TaskStatus" }
+        dueDate: { type: string, nullable: true }
+    Document:
+      type: object
+      properties:
+        id: { type: integer }
+        caseId: { type: integer }
+        filename: { type: string }
+        fileUrl: { type: string }
+        type: { $ref: "#/components/schemas/DocumentType" }
+        size: { type: integer }
+        tags: { type: array, items: { type: string } }
+        createdAt: { type: string }
+    NewDocumentInput:
+      type: object
+      required: [caseId, filename, fileUrl]
+      properties:
+        caseId: { type: integer }
+        filename: { type: string }
+        fileUrl: { type: string }
+        type: { $ref: "#/components/schemas/DocumentType" }
+        size: { type: integer }
+        tags: { type: array, items: { type: string } }
+    Stats:
+      type: object
+      properties:
+        totalCases: { type: integer }
+        completedCases: { type: integer }
+        openTasks: { type: integer }
+        totalCustomers: { type: integer }
+        trend30:
+          type: array
+          items:
+            type: object
+            properties:
+              date: { type: string }
+              cases: { type: integer }
+              tasks: { type: integer }
+        statusBreakdown:
+          type: array
+          items:
+            type: object
+            properties:
+              status: { $ref: "#/components/schemas/CaseStatus" }
+              count: { type: integer }
+    Conversation:
+      type: object
+      properties:
+        id: { type: integer }
+        name: { type: string, nullable: true }
+        type: { $ref: "#/components/schemas/ConversationType" }
+        createdAt: { type: string }
+        members:
+          type: array
+          items: { type: string }
+    ConversationWithPreview:
+      allOf:
+        - $ref: "#/components/schemas/Conversation"
+        - type: object
+          properties:
+            lastMessage: { type: string, nullable: true }
+            lastMessageAt: { type: string, nullable: true }
+    NewConversationInput:
+      type: object
+      required: [type, members]
+      properties:
+        type: { $ref: "#/components/schemas/ConversationType" }
+        name: { type: string }
+        members:
+          type: array
+          items: { type: string }
+    Message:
+      type: object
+      properties:
+        id: { type: integer }
+        conversationId: { type: integer }
+        senderName: { type: string }
+        content: { type: string }
+        createdAt: { type: string }
+        deletedAt: { type: string, nullable: true }
+        caseTags:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: integer }
+              caseNumber: { type: string }
+    NewMessageInput:
+      type: object
+      required: [senderName, content]
+      properties:
+        senderName: { type: string }
+        content: { type: string }
+        caseTags:
+          type: array
+          items: { type: integer }

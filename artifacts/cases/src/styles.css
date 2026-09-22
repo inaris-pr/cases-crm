@@ -1,0 +1,176 @@
+@import "tailwindcss";
+
+/* ── Design tokens ────────────────────────────────────────────────────────── */
+@theme {
+  --color-background: #0b0b0f;
+  --color-card: #141419;
+  --color-foreground: #f8f8ff;
+  --color-muted-foreground: rgba(255, 255, 255, 0.45);
+  --color-primary: #29f312;
+  --color-primary-foreground: #050505;
+  --color-border: rgba(255, 255, 255, 0.08);
+  --color-input: rgba(255, 255, 255, 0.05);
+
+  --color-status-intake: #3b82f6;
+  --color-status-review: #a855f7;
+  --color-status-in-progress: #29f312;
+  --color-status-waiting: #f59e0b;
+  --color-status-completed: #ef4444;
+
+  --color-priority-low: #64748b;
+  --color-priority-medium: #3b82f6;
+  --color-priority-high: #f59e0b;
+  --color-priority-critical: #ef4444;
+
+  --radius-md: 0.75rem;
+  --radius-lg: 1rem;
+  --radius-xl: 1.25rem;
+
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue",
+    Arial, sans-serif;
+}
+
+/* ── Base ─────────────────────────────────────────────────────────────────── */
+html,
+body,
+#root {
+  height: 100%;
+  background: var(--color-background);
+  color: var(--color-foreground);
+  font-family: var(--font-sans);
+}
+
+* {
+  border-color: var(--color-border);
+}
+
+::selection {
+  background-color: rgba(41, 243, 18, 0.25);
+}
+
+/* Style the native <option> dropdown so it matches the dark theme.
+   Chromium honours these on Windows; Firefox uses them too. */
+option {
+  background-color: #141419;
+  color: #f8f8ff;
+  padding: 6px 8px;
+}
+option:checked {
+  background-color: rgba(41, 243, 18, 0.18);
+  color: #29f312;
+  font-weight: 600;
+}
+option:hover {
+  background-color: rgba(255, 255, 255, 0.06);
+}
+select {
+  color-scheme: dark;
+}
+
+/* ── Custom scrollbar (subtle dark) ───────────────────────────────────────── */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.16);
+}
+
+/* ── Reusable utilities ───────────────────────────────────────────────────── */
+@layer utilities {
+  .glass-panel {
+    background-color: rgba(20, 20, 25, 0.6);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 1rem;
+  }
+  .glass-soft {
+    background-color: rgba(20, 20, 25, 0.45);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 0.75rem;
+  }
+  .neon-text {
+    text-shadow: 0 0 20px rgba(41, 243, 18, 0.6);
+  }
+  .neon-border {
+    box-shadow:
+      0 0 20px rgba(41, 243, 18, 0.15),
+      inset 0 0 20px rgba(41, 243, 18, 0.05);
+  }
+  .label-eyebrow {
+    text-transform: uppercase;
+    font-size: 10px;
+    letter-spacing: 0.18em;
+    color: var(--color-muted-foreground);
+  }
+  .bg-glow {
+    background-image: radial-gradient(
+        ellipse 80% 50% at 50% 0%,
+        rgba(41, 243, 18, 0.12),
+        transparent 70%
+      ),
+      radial-gradient(ellipse 60% 50% at 100% 100%, rgba(168, 85, 247, 0.08), transparent 70%),
+      radial-gradient(ellipse 60% 50% at 0% 100%, rgba(59, 130, 246, 0.06), transparent 70%);
+    mix-blend-mode: screen;
+    opacity: 0.7;
+  }
+  .dot-grid {
+    background-image: radial-gradient(rgba(255, 255, 255, 0.08) 1px, transparent 1px);
+    background-size: 22px 22px;
+  }
+  .focus-ring {
+    outline: none;
+    transition: box-shadow 0.15s ease;
+  }
+  .focus-ring:focus-visible {
+    box-shadow: 0 0 0 2px rgba(41, 243, 18, 0.45);
+  }
+
+  /* status badge backgrounds (10% tint, full-color text) */
+  .badge-intake {
+    background: rgba(59, 130, 246, 0.12);
+    color: var(--color-status-intake);
+  }
+  .badge-review {
+    background: rgba(168, 85, 247, 0.12);
+    color: var(--color-status-review);
+  }
+  .badge-in_progress {
+    background: rgba(41, 243, 18, 0.12);
+    color: var(--color-status-in-progress);
+  }
+  .badge-waiting {
+    background: rgba(245, 158, 11, 0.12);
+    color: var(--color-status-waiting);
+  }
+  .badge-completed {
+    background: rgba(239, 68, 68, 0.12);
+    color: var(--color-status-completed);
+  }
+  .badge-priority-low {
+    background: rgba(100, 116, 139, 0.14);
+    color: #94a3b8;
+  }
+  .badge-priority-medium {
+    background: rgba(59, 130, 246, 0.14);
+    color: #60a5fa;
+  }
+  .badge-priority-high {
+    background: rgba(245, 158, 11, 0.14);
+    color: #fbbf24;
+  }
+  .badge-priority-critical {
+    background: rgba(239, 68, 68, 0.14);
+    color: #f87171;
+  }
+}
