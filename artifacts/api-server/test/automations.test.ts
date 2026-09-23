@@ -205,6 +205,123 @@ describe("global automations", () => {
   });
 });
 
+describe("choosing scope when creating", () => {
+  it("defaults to case scope when scope is omitted (backwards compatible)", async () => {
+    const { body } = await request(app)
+      .post("/api/cases/1/automations")
+      .set(asMe)
+      .send({ name: "Scope omitted" })
+      .expect(201);
+
+    expect(body).toMatchObject({ scope: "case", caseId: 1, originCaseId: null });
+  });
+
+  it("creates a case-scoped automation visible only in the originating case", async () => {
+    const { body } = await request(app)
+      .post("/api/cases/2/automations")
+      .set(asMe)
+      .send({ name: "Explicitly case scoped", scope: "case" })
+      .expect(201);
+
+    expect(body).toMatchObject({ scope: "case", caseId: 2, originCaseId: null });
+    expect(names(await listFor(2))).toContain("Explicitly case scoped");
+    for (const other of [1, 3, 4]) {
+      expect(names(await listFor(other))).not.toContain("Explicitly case scoped");
+    }
+  });
+
+  it("creates a global directly when scope is global", async () => {
+    const { body } = await request(app)
+      .post("/api/cases/3/automations")
+      .set(asMe)
+      .send({ name: "Born global", scope: "global" })
+      .expect(201);
+
+    expect(body).toMatchObject({
+      scope: "global",
+      caseId: null,
+      originCaseId: 3, // provenance: the case it was created from
+      derivedFromAutomationId: null,
+    });
+  });
+
+  it("is atomic — the single create response is already global, with no promotion", async () => {
+    const created = (
+      await request(app)
+        .post("/api/cases/4/automations")
+        .set(asMe)
+        .send({ name: "Atomic global", scope: "global" })
+        .expect(201)
+    ).body;
+
+    // Promotion calls touch(), which moves updatedAt past createdAt. Equal
+    // timestamps prove no second mutation ran after the insert.
+    expect(created.updatedAt).toBe(created.createdAt);
+    expect(created.scope).toBe("global");
+
+    // And it is already global in the store, not merely in the response.
+    const refetched = (await request(app).get(`/api/automations/${created.id}`).expect(200)).body;
+    expect(refetched).toMatchObject({ scope: "global", caseId: null, originCaseId: 4 });
+    expect(refetched.updatedAt).toBe(created.createdAt);
+
+    const globals = (await request(app).get("/api/automations?scope=global").expect(200)).body;
+    expect(globals.filter((g: any) => g.name === "Atomic global")).toHaveLength(1);
+  });
+
+  it("makes a newly created global appear in cases that already existed", async () => {
+    await request(app)
+      .post("/api/cases/5/automations")
+      .set(asMe)
+      .send({ name: "Global for everyone", scope: "global" })
+      .expect(201);
+
+    for (const caseId of [1, 2, 5, 9, 14]) {
+      const row = (await listFor(caseId)).find((r) => r.name === "Global for everyone");
+      expect(row).toBeTruthy();
+      expect(row!.scope).toBe("global");
+      expect(row!.inherited).toBe(true);
+    }
+  });
+
+  it("makes it appear automatically in a case created afterwards", async () => {
+    await request(app)
+      .post("/api/cases/6/automations")
+      .set(asMe)
+      .send({ name: "Global before the case existed", scope: "global" })
+      .expect(201);
+
+    const laterCase = (
+      await request(app)
+        .post("/api/cases")
+        .set(asMe)
+        .send({ accountId: 1, title: "Opened after the global was created" })
+        .expect(201)
+    ).body;
+
+    // Nothing was written for this case — the union produces it at read time.
+    expect(names(await listFor(laterCase.id))).toContain("Global before the case existed");
+  });
+
+  it("rejects an unknown scope with 400", async () => {
+    for (const scope of ["everything", "all", "CASE", "", null, 7]) {
+      const { body } = await request(app)
+        .post("/api/cases/1/automations")
+        .set(asMe)
+        .send({ name: "Bad scope", scope })
+        .expect(400);
+      expect(body.error).toBe("validation_error");
+    }
+  });
+
+  it("still 404s for an unknown case regardless of scope", async () => {
+    await request(app)
+      .post("/api/cases/99999/automations")
+      .set(asMe)
+      .send({ name: "Orphan global", scope: "global" })
+      .expect(404);
+  });
+});
+
 describe("customizing a global for one case", () => {
   // Each test creates its own global. Sharing one would make the suite
   // order-dependent: the "later edits" test below deliberately renames and

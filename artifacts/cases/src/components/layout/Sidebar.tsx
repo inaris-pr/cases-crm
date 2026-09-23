@@ -6,7 +6,6 @@ import {
   FolderKanban,
   Users,
   Calculator,
-  Workflow as WorkflowIcon,
   LineChart,
   Settings as SettingsIcon,
   Zap,
@@ -29,7 +28,6 @@ const NAV = [
   { label: "Clients", href: "/clients", icon: Users },
   { label: "Cases", href: "/cases", icon: FolderKanban },
   { label: "Accounting", href: "/accounting", icon: Calculator },
-  { label: "Automations", href: "/workflow", icon: WorkflowIcon },
   { label: "Insights", href: "/insights", icon: LineChart },
   { label: "Settings", href: "/settings", icon: SettingsIcon },
 ];

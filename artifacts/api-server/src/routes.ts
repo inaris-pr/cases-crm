@@ -1283,7 +1283,19 @@ export function registerRoutes(app: Express) {
     }),
   );
 
-  /** Create an automation owned by this case. */
+  /**
+   * Create an automation from a case.
+   *
+   * `scope` decides where it lives, in one atomic operation — a global is
+   * created global, never created case-scoped and then promoted:
+   *
+   *   "case"   (default) owned by this case, invisible elsewhere
+   *   "global" owned by no case, offered to every case by union at read time,
+   *            with this case recorded as originCaseId for provenance
+   *
+   * Omitting `scope` keeps the original behaviour, so older callers still
+   * create case-scoped automations.
+   */
   r.post(
     "/cases/:id/automations",
     asyncHandler(async (req, res) => {
@@ -1294,19 +1306,21 @@ export function registerRoutes(app: Express) {
           name: automationName,
           graph: automationGraphSchema.optional(),
           enabled: z.boolean().optional(),
+          scope: z.enum(["case", "global"]).default("case"),
         })
         .parse(req.body);
       const me = currentUser(req) ?? "Iris Burgos";
       const now = new Date().toISOString();
+      const isGlobal = body.scope === "global";
       const created: Automation = {
         id: nextAutomationId(),
         name: body.name,
-        scope: "case",
-        caseId: id,
+        scope: body.scope,
+        caseId: isGlobal ? null : id,
         graph: body.graph ?? EMPTY_GRAPH,
         enabled: body.enabled ?? true,
         derivedFromAutomationId: null,
-        originCaseId: null,
+        originCaseId: isGlobal ? id : null,
         ownerName: me,
         createdAt: now,
         createdByName: me,

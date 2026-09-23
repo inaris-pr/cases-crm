@@ -1,4 +1,4 @@
-import { Route, Switch } from "wouter";
+import { Redirect, Route, Switch } from "wouter";
 import { AuthProvider, useAuth } from "./lib/auth";
 import { AppLayout } from "./components/layout/AppLayout";
 import { Dashboard } from "./pages/Dashboard";
@@ -10,7 +10,6 @@ import { Clients } from "./pages/Clients";
 import { ContactDetail } from "./pages/ContactDetail";
 import { Leads } from "./pages/Leads";
 import { Accounting } from "./pages/Accounting";
-import { Workflow } from "./pages/Workflow";
 import { Insights } from "./pages/Insights";
 import { Settings } from "./pages/Settings";
 import { Messages } from "./pages/Messages";
@@ -51,7 +50,12 @@ function Gate() {
         <Route path="/cases" component={CasesList} />
         <Route path="/cases/:id" component={CaseDetail} />
         <Route path="/accounting" component={Accounting} />
-        <Route path="/workflow" component={Workflow} />
+        {/* Automations live inside a case (Case > Automations). The old
+            standalone workspace is gone; keep the route so existing links
+            land somewhere useful instead of on Not found. */}
+        <Route path="/workflow">
+          <Redirect to="/cases" />
+        </Route>
         <Route path="/insights" component={Insights} />
         <Route path="/settings" component={Settings} />
         <Route path="/messages" component={Messages} />

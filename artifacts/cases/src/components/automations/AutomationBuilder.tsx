@@ -35,7 +35,8 @@ export interface AutomationBuilderProps {
  * The visual workflow builder: node palette, pan/zoom canvas, edge drawing and
  * the per-node config popup.
  *
- * Extracted verbatim from pages/Workflow.tsx. The only structural change is
+ * Extracted verbatim from the former pages/Workflow.tsx, which has since been
+ * removed. The only structural change is
  * that the graph is now controlled through `value`/`onChange` instead of being
  * held in local state; pan, zoom and node selection remain internal because
  * they are view state, not document state. `value.viewport` is carried through

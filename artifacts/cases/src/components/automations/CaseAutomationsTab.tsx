@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Plus, Play, Save, Trash2, Move, Globe, Workflow as WorkflowIcon } from "lucide-react";
+import { Plus, Play, Save, Trash2, Move, Globe, Building2, Workflow as WorkflowIcon } from "lucide-react";
 import { API, fetchJson } from "@/lib/api";
-import type { Automation, AutomationGraph, AutomationSummary } from "@/lib/api";
+import type { Automation, AutomationGraph, AutomationScope, AutomationSummary } from "@/lib/api";
 import { Button } from "@/components/ui/Button";
 import { Input, Label } from "@/components/ui/Input";
 import { Modal } from "@/components/ui/Modal";
@@ -51,6 +51,8 @@ export function CaseAutomationsTab({ caseId, onDirtyChange }: CaseAutomationsTab
   const [running, setRunning] = useState(false);
   const [newOpen, setNewOpen] = useState(false);
   const [newName, setNewName] = useState("");
+  const [newScope, setNewScope] = useState<AutomationScope>("case");
+  const [confirmGlobal, setConfirmGlobal] = useState(false);
   const [pendingSelectId, setPendingSelectId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -102,21 +104,25 @@ export function CaseAutomationsTab({ caseId, onDirtyChange }: CaseAutomationsTab
   }, [dirty, onDirtyChange]);
 
   const create = useMutation({
-    mutationFn: (name: string) =>
+    mutationFn: (vars: { name: string; scope: AutomationScope }) =>
       fetchJson<Automation>(API(`/api/cases/${caseId}/automations`), {
         method: "POST",
-        // scope "case" and this caseId are set server-side: a new automation
-        // never touches another case.
-        body: JSON.stringify({ name, graph: EMPTY_GRAPH }),
+        // One request creates the intended scope. A global is never created
+        // case-scoped and then promoted; the server sets caseId and
+        // originCaseId from this case.
+        body: JSON.stringify({ name: vars.name, scope: vars.scope, graph: EMPTY_GRAPH }),
       }),
     onSuccess: (created) => {
-      qc.invalidateQueries({ queryKey: ["case-automations", caseId] });
+      // A new global belongs to every case, so drop every cached case list,
+      // not just this one.
+      qc.invalidateQueries({
+        queryKey: created.scope === "global" ? ["case-automations"] : ["case-automations", caseId],
+      });
       setSelectedId(created.id);
       const next: Draft = { name: created.name, graph: created.graph };
       setDraft(next);
       setBaseline(fingerprint(next));
-      setNewOpen(false);
-      setNewName("");
+      closeNew();
       setError(null);
     },
     onError: (e: Error) => setError(e.message || "Could not create the automation."),
@@ -138,6 +144,23 @@ export function CaseAutomationsTab({ caseId, onDirtyChange }: CaseAutomationsTab
     },
     onError: (e: Error) => setError(e.message || "Could not save the automation."),
   });
+
+  function closeNew() {
+    setNewOpen(false);
+    setNewName("");
+    setNewScope("case");
+    setConfirmGlobal(false);
+  }
+
+  /** "All cases" is a bigger commitment, so it confirms before submitting. */
+  function submitNew() {
+    if (newNameError) return;
+    if (newScope === "global" && !confirmGlobal) {
+      setConfirmGlobal(true);
+      return;
+    }
+    create.mutate({ name: newNameTrimmed, scope: newScope });
+  }
 
   function requestSelect(id: number) {
     if (id === selectedId) return;
@@ -327,55 +350,87 @@ export function CaseAutomationsTab({ caseId, onDirtyChange }: CaseAutomationsTab
       {/* New automation */}
       <Modal
         open={newOpen}
-        onClose={() => {
-          setNewOpen(false);
-          setNewName("");
-        }}
-        title="New automation"
-        description="It belongs to this case only until you choose to apply it to all cases."
+        onClose={closeNew}
+        title={confirmGlobal ? "Create this automation for all cases?" : "New automation"}
+        description={
+          confirmGlobal
+            ? undefined
+            : "Choose whether it belongs to this case alone or to every case."
+        }
         widthClass="max-w-md"
       >
-        <div className="space-y-3">
-          <div>
-            <Label>Name</Label>
-            <Input
-              autoFocus
-              value={newName}
-              maxLength={NAME_MAX + 20}
-              onChange={(e) => setNewName(e.target.value)}
-              placeholder="e.g. Renewal reminder"
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !newNameError) create.mutate(newNameTrimmed);
-              }}
-            />
-            {newName.length > 0 && newNameError && (
-              <div className="text-[11px] text-rose-300 mt-1">{newNameError}</div>
-            )}
-            {!newNameError && newNameDuplicate && (
-              <div className="text-[11px] text-amber-300/90 mt-1">
-                This case already has an automation with that name. That is allowed, but it
-                will be harder to tell them apart.
+        {confirmGlobal ? (
+          <div className="space-y-4">
+            <p className="text-[13px] text-white/70 leading-relaxed">
+              <span className="font-semibold text-white">{newNameTrimmed}</span> will be
+              available to all existing cases and automatically to every case created in
+              future. Anyone editing it later changes it for every case.
+            </p>
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" onClick={() => setConfirmGlobal(false)}>
+                Cancel
+              </Button>
+              <Button onClick={submitNew} disabled={create.isPending}>
+                <Globe size={14} />
+                {create.isPending ? "Creating…" : "Create for all cases"}
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            <div>
+              <Label>Name</Label>
+              <Input
+                autoFocus
+                value={newName}
+                maxLength={NAME_MAX + 20}
+                onChange={(e) => setNewName(e.target.value)}
+                placeholder="e.g. Renewal reminder"
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") submitNew();
+                }}
+              />
+              {newName.length > 0 && newNameError && (
+                <div className="text-[11px] text-rose-300 mt-1">{newNameError}</div>
+              )}
+              {!newNameError && newNameDuplicate && (
+                <div className="text-[11px] text-amber-300/90 mt-1">
+                  This case already has an automation with that name. That is allowed, but it
+                  will be harder to tell them apart.
+                </div>
+              )}
+            </div>
+
+            <div>
+              <Label>Apply this automation to</Label>
+              <div className="space-y-2">
+                <ScopeCard
+                  selected={newScope === "case"}
+                  onSelect={() => setNewScope("case")}
+                  icon={Building2}
+                  title="This case only"
+                  description="Only available for this case."
+                />
+                <ScopeCard
+                  selected={newScope === "global"}
+                  onSelect={() => setNewScope("global")}
+                  icon={Globe}
+                  title="All cases"
+                  description="Available to every existing case, and automatically to every future case."
+                />
               </div>
-            )}
+            </div>
+
+            <div className="flex justify-end gap-2 pt-1">
+              <Button variant="outline" onClick={closeNew}>
+                Cancel
+              </Button>
+              <Button onClick={submitNew} disabled={!!newNameError || create.isPending}>
+                {create.isPending ? "Creating…" : "Create"}
+              </Button>
+            </div>
           </div>
-          <div className="flex justify-end gap-2 pt-1">
-            <Button
-              variant="outline"
-              onClick={() => {
-                setNewOpen(false);
-                setNewName("");
-              }}
-            >
-              Cancel
-            </Button>
-            <Button
-              onClick={() => create.mutate(newNameTrimmed)}
-              disabled={!!newNameError || create.isPending}
-            >
-              {create.isPending ? "Creating…" : "Create"}
-            </Button>
-          </div>
-        </div>
+        )}
       </Modal>
 
       {/* Unsaved changes when switching automation */}
@@ -396,5 +451,53 @@ export function CaseAutomationsTab({ caseId, onDirtyChange }: CaseAutomationsTab
         </div>
       </Modal>
     </div>
+  );
+}
+
+/** Radio-style choice card, matching the panel styling used elsewhere. */
+function ScopeCard({
+  selected,
+  onSelect,
+  icon: Icon,
+  title,
+  description,
+}: {
+  selected: boolean;
+  onSelect: () => void;
+  icon: typeof Globe;
+  title: string;
+  description: string;
+}) {
+  return (
+    <button
+      type="button"
+      role="radio"
+      aria-checked={selected}
+      onClick={onSelect}
+      className={
+        "w-full text-left flex items-start gap-3 rounded-lg border px-3 py-2.5 transition focus-ring " +
+        (selected
+          ? "border-[var(--color-primary)]/60 bg-[var(--color-primary)]/[0.07]"
+          : "border-white/10 bg-white/[0.02] hover:bg-white/5")
+      }
+    >
+      <span
+        className={
+          "mt-0.5 size-4 shrink-0 rounded-full border grid place-items-center " +
+          (selected ? "border-[var(--color-primary)]" : "border-white/25")
+        }
+      >
+        {selected && <span className="size-2 rounded-full bg-[var(--color-primary)]" />}
+      </span>
+      <span className="min-w-0">
+        <span className="flex items-center gap-1.5 text-[13px] font-semibold text-white">
+          <Icon size={13} className={selected ? "text-[var(--color-primary)]" : "text-white/50"} />
+          {title}
+        </span>
+        <span className="block text-[11px] text-white/50 mt-0.5 leading-relaxed">
+          {description}
+        </span>
+      </span>
+    </button>
   );
 }
