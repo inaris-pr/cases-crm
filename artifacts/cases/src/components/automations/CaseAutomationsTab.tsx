@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Plus, Play, Save, Trash2, Move, Globe, Building2, Workflow as WorkflowIcon } from "lucide-react";
+import {
+  Plus, Play, Save, Trash2, Move, Globe, Building2, GitFork, Undo2, Users,
+  Workflow as WorkflowIcon,
+} from "lucide-react";
 import { API, fetchJson } from "@/lib/api";
 import type {
   Automation,
@@ -60,6 +63,10 @@ export function CaseAutomationsTab({ caseId, onDirtyChange }: CaseAutomationsTab
   const [newScope, setNewScope] = useState<AutomationScope>("case");
   const [confirmGlobal, setConfirmGlobal] = useState(false);
   const [confirmSaveOpen, setConfirmSaveOpen] = useState(false);
+  const [confirmPromoteOpen, setConfirmPromoteOpen] = useState(false);
+  const [confirmRevertOpen, setConfirmRevertOpen] = useState(false);
+  const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
+  const [deleteNameInput, setDeleteNameInput] = useState("");
   const [pendingSelectId, setPendingSelectId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -78,12 +85,15 @@ export function CaseAutomationsTab({ caseId, onDirtyChange }: CaseAutomationsTab
   const usageQ = useQuery({
     queryKey: ["automation-usage", selectedId],
     queryFn: () => fetchJson<AutomationUsage>(API(`/api/automations/${selectedId}/usage`)),
-    enabled: confirmSaveOpen && selectedId !== null,
+    enabled: (confirmSaveOpen || confirmDeleteOpen) && selectedId !== null,
   });
 
   const automations = useMemo(() => listQ.data ?? [], [listQ.data]);
   const selectedSummary = automations.find((a) => a.id === selectedId) ?? null;
   const isGlobal = selectedSummary?.scope === "global";
+  const isCustomized = selectedSummary?.customized === true;
+  /** A plain case automation: promotable, and not a customized copy. */
+  const isPlainCaseAutomation = selectedSummary?.scope === "case" && !isCustomized;
   const dirty = draft !== null && fingerprint(draft) !== baseline;
 
   // Select the first automation once the list arrives.
@@ -179,6 +189,90 @@ export function CaseAutomationsTab({ caseId, onDirtyChange }: CaseAutomationsTab
     }
     create.mutate({ name: newNameTrimmed, scope: newScope });
   }
+
+  /** Every case's cached list, since a global reaches all of them. */
+  function invalidateAllCaseLists() {
+    qc.invalidateQueries({ queryKey: ["case-automations"] });
+  }
+
+  /** Blank the editor so a stale draft never shows while the next one loads. */
+  function clearDraft() {
+    setDraft(null);
+    setBaseline("");
+  }
+
+  /** "Apply to all cases" — promotes this case's automation in place. */
+  const promote = useMutation({
+    mutationFn: () =>
+      fetchJson<Automation>(API(`/api/automations/${selectedId}/promote`), {
+        method: "POST",
+        body: JSON.stringify({}),
+      }),
+    onSuccess: (promoted) => {
+      // Same row, now global: it stays selected and the draft still matches.
+      invalidateAllCaseLists();
+      qc.invalidateQueries({ queryKey: ["automation", promoted.id] });
+      setConfirmPromoteOpen(false);
+      setError(null);
+    },
+    onError: (e: Error) => setError(e.message || "Could not apply the automation to all cases."),
+  });
+
+  /** "Customize for this case" — forks a global into a copy this case owns. */
+  const customize = useMutation({
+    mutationFn: () =>
+      fetchJson<Automation>(API(`/api/automations/${selectedId}/fork`), {
+        method: "POST",
+        body: JSON.stringify({ caseId }),
+      }),
+    onSuccess: (fork) => {
+      qc.invalidateQueries({ queryKey: ["case-automations", caseId] });
+      setSelectedId(fork.id);
+      const next: Draft = { name: fork.name, graph: fork.graph };
+      setDraft(next);
+      setBaseline(fingerprint(next));
+      setError(null);
+    },
+    onError: (e: Error) => setError(e.message || "Could not customize this automation."),
+  });
+
+  /** "Revert to global" — discards this case's copy and inherits again. */
+  const revert = useMutation({
+    mutationFn: () =>
+      fetchJson<{ restored: AutomationSummary }>(API(`/api/automations/${selectedId}/revert`), {
+        method: "POST",
+        body: JSON.stringify({}),
+      }),
+    onSuccess: (res) => {
+      const discardedId = selectedId;
+      clearDraft();
+      setSelectedId(res.restored.id);
+      if (discardedId !== null) qc.removeQueries({ queryKey: ["automation", discardedId] });
+      qc.invalidateQueries({ queryKey: ["case-automations", caseId] });
+      setConfirmRevertOpen(false);
+      setError(null);
+    },
+    onError: (e: Error) => setError(e.message || "Could not revert to the global automation."),
+  });
+
+  const remove = useMutation({
+    mutationFn: () =>
+      fetchJson<void>(API(`/api/automations/${selectedId}`), { method: "DELETE" }),
+    onSuccess: () => {
+      const removedId = selectedId;
+      // Blanking the draft also clears the dirty flag, so leaving the tab
+      // afterwards does not warn about an automation that no longer exists.
+      clearDraft();
+      setSelectedId(null);
+      if (removedId !== null) qc.removeQueries({ queryKey: ["automation", removedId] });
+      if (isGlobal) invalidateAllCaseLists();
+      else qc.invalidateQueries({ queryKey: ["case-automations", caseId] });
+      setConfirmDeleteOpen(false);
+      setDeleteNameInput("");
+      setError(null);
+    },
+    onError: (e: Error) => setError(e.message || "Could not delete the automation."),
+  });
 
   /**
    * Editing a global changes it for every case, so saving one confirms first.
@@ -339,6 +433,62 @@ export function CaseAutomationsTab({ caseId, onDirtyChange }: CaseAutomationsTab
               {selectedSummary.customized && (
                 <div className="text-amber-300/80">Customized copy of a global automation</div>
               )}
+            </div>
+          )}
+
+          {/* Scope and lifecycle actions. These act on the saved record rather
+              than the canvas, so they are disabled while there are unsaved
+              edits — save or discard first. */}
+          {selectedSummary && (
+            <div className="ml-auto flex items-center gap-2 pt-5 flex-wrap">
+              {isPlainCaseAutomation && (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => setConfirmPromoteOpen(true)}
+                  disabled={dirty || promote.isPending}
+                  title={dirty ? "Save or discard your changes first" : "Make this available to every case"}
+                >
+                  <Users size={13} />
+                  Apply to all cases
+                </Button>
+              )}
+              {isGlobal && (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => customize.mutate()}
+                  disabled={dirty || customize.isPending}
+                  title={dirty ? "Save or discard your changes first" : "Make a copy only this case uses"}
+                >
+                  <GitFork size={13} />
+                  {customize.isPending ? "Customizing…" : "Customize for this case"}
+                </Button>
+              )}
+              {isCustomized && (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => setConfirmRevertOpen(true)}
+                  disabled={dirty || revert.isPending}
+                  title={dirty ? "Save or discard your changes first" : "Discard this copy and use the global again"}
+                >
+                  <Undo2 size={13} />
+                  Revert to global
+                </Button>
+              )}
+              <Button
+                variant="danger"
+                size="sm"
+                onClick={() => {
+                  setDeleteNameInput("");
+                  setConfirmDeleteOpen(true);
+                }}
+                disabled={remove.isPending}
+              >
+                <Trash2 size={13} />
+                Delete
+              </Button>
             </div>
           )}
         </div>
@@ -506,6 +656,131 @@ export function CaseAutomationsTab({ caseId, onDirtyChange }: CaseAutomationsTab
             >
               <Globe size={14} />
               {save.isPending ? "Saving…" : "Save changes to all cases"}
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Apply to all cases */}
+      <Modal
+        open={confirmPromoteOpen}
+        onClose={() => setConfirmPromoteOpen(false)}
+        title="Apply this automation to all cases?"
+        widthClass="max-w-md"
+      >
+        <div className="space-y-4">
+          <p className="text-[13px] text-white/70 leading-relaxed">
+            <span className="font-semibold text-white">{trimmedName}</span> will become a
+            global automation: available in every existing case and automatically in every
+            case created in future. It stays one record — nothing is copied — and anyone
+            editing it later changes it for every case.
+          </p>
+          <InlineError message={promote.isError ? error : null} />
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" onClick={() => setConfirmPromoteOpen(false)}>
+              Cancel
+            </Button>
+            <Button onClick={() => promote.mutate()} disabled={promote.isPending}>
+              <Users size={14} />
+              {promote.isPending ? "Applying…" : "Apply to all cases"}
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Revert to global */}
+      <Modal
+        open={confirmRevertOpen}
+        onClose={() => setConfirmRevertOpen(false)}
+        title="Revert to the global automation?"
+        widthClass="max-w-md"
+      >
+        <div className="space-y-4">
+          <p className="text-[13px] text-white/70 leading-relaxed">
+            This case's customized copy,{" "}
+            <span className="font-semibold text-white">{trimmedName}</span>, will be
+            permanently deleted and this case will use the shared global automation again.
+            The global automation itself is not changed, and no other case is affected.
+          </p>
+          <InlineError message={revert.isError ? error : null} />
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" onClick={() => setConfirmRevertOpen(false)}>
+              Cancel
+            </Button>
+            <Button variant="danger" onClick={() => revert.mutate()} disabled={revert.isPending}>
+              <Undo2 size={14} />
+              {revert.isPending ? "Reverting…" : "Discard copy and revert"}
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Delete */}
+      <Modal
+        open={confirmDeleteOpen}
+        onClose={() => {
+          setConfirmDeleteOpen(false);
+          setDeleteNameInput("");
+        }}
+        title={isGlobal ? "Delete this global automation?" : "Delete this automation?"}
+        widthClass="max-w-md"
+      >
+        <div className="space-y-4">
+          {isGlobal ? (
+            <>
+              <p className="text-[13px] text-white/70 leading-relaxed">
+                <span className="font-semibold text-white">{trimmedName}</span> is shared.
+                Deleting it removes it from{" "}
+                <span className="font-semibold text-white">
+                  {usageQ.data ? `${usageQ.data.caseCount} case${usageQ.data.caseCount === 1 ? "" : "s"}` : "every case using it"}
+                </span>
+                . This cannot be undone.
+              </p>
+              <p className="text-[12px] text-white/55 leading-relaxed">
+                {usageQ.data && usageQ.data.forkedByCaseCount > 0
+                  ? `${usageQ.data.forkedByCaseCount} case${usageQ.data.forkedByCaseCount === 1 ? " has" : "s have"} a customized copy. Those copies are kept and become independent automations.`
+                  : "No case has a customized copy of it."}
+              </p>
+              <div>
+                <Label>Type the automation name to confirm</Label>
+                <Input
+                  autoFocus
+                  value={deleteNameInput}
+                  onChange={(e) => setDeleteNameInput(e.target.value)}
+                  placeholder={trimmedName}
+                />
+              </div>
+            </>
+          ) : (
+            <p className="text-[13px] text-white/70 leading-relaxed">
+              <span className="font-semibold text-white">{trimmedName}</span> will be deleted
+              from this case. This cannot be undone. No other case is affected.
+            </p>
+          )}
+          <InlineError message={remove.isError ? error : null} />
+          <div className="flex justify-end gap-2">
+            <Button
+              variant="outline"
+              onClick={() => {
+                setConfirmDeleteOpen(false);
+                setDeleteNameInput("");
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="danger"
+              onClick={() => remove.mutate()}
+              disabled={
+                remove.isPending || (isGlobal && deleteNameInput.trim() !== trimmedName)
+              }
+            >
+              <Trash2 size={14} />
+              {remove.isPending
+                ? "Deleting…"
+                : isGlobal
+                  ? "Delete for all cases"
+                  : "Delete automation"}
             </Button>
           </div>
         </div>
