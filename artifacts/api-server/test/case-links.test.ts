@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import request from "supertest";
 import { createTestApp, asMe } from "./helpers/app";
+import { store } from "../src/store";
 import {
   accountDetailPath,
   caseAccountLink,
@@ -237,12 +238,15 @@ describe("caseLinks: against GET /api/cases/:id", () => {
       .set(asMe)
       .send({ title: "Stale contact", accountId: PATEL_REAL_ESTATE, primaryContactId: HASSAN })
       .expect(201);
-    // PATCH does not validate primaryContactId, so a stale id is reachable.
+    // The API no longer accepts an unknown contact id (POST or PATCH), so
+    // this state only exists in older data. Recreate it directly in this
+    // file's isolated in-memory store.
     await request(app)
       .patch(`/api/cases/${created.body.id}`)
       .set(asMe)
       .send({ primaryContactId: 999999 })
-      .expect(200);
+      .expect(400, { error: "unknown_contact" });
+    store.cases.find((x) => x.id === created.body.id)!.primaryContactId = 999999;
     await getContact(999999).expect(404);
 
     const { body: c } = await getCase(created.body.id);

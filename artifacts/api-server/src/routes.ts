@@ -336,11 +336,50 @@ export function registerRoutes(app: Express) {
           priority: casePriority.optional(),
           description: z.string().optional(),
           tags: z.array(z.string()).optional(),
+          accountId: z.number().int().positive().optional(),
+          // null clears the primary contact; omitted leaves it unchanged.
           primaryContactId: z.number().int().positive().nullable().optional(),
         })
         .parse(req.body);
       const c = findCaseFor(req, id);
       if (!c) return res.status(404).json({ error: "not_found" });
+
+      // The same Account/Contact rules as POST /cases, applied to the
+      // relationship the case would have AFTER this update. Nothing is
+      // written unless every check passes.
+      const nextAccountId = body.accountId ?? c.accountId;
+      const contactSupplied = body.primaryContactId !== undefined;
+      const nextContactId = contactSupplied ? body.primaryContactId ?? null : c.primaryContactId;
+      const accountChanged = nextAccountId !== c.accountId;
+      const contactChanged = nextContactId !== c.primaryContactId;
+
+      if (body.accountId !== undefined && !store.accounts.some((a) => a.id === body.accountId)) {
+        return res.status(400).json({ error: "unknown_account" });
+      }
+      // Only a changed relationship is re-checked, so partial updates (status,
+      // title, …) to an existing case keep working as before.
+      if ((accountChanged || contactChanged) && nextContactId !== null) {
+        const contact = store.contacts.find((p) => p.id === nextContactId);
+        if (!contact) return res.status(400).json({ error: "unknown_contact" });
+        const linked = store.accountContactLinks.some(
+          (l) => l.accountId === nextAccountId && l.contactId === nextContactId && !l.endedAt,
+        );
+        if (!linked) {
+          if (!contactSupplied) {
+            // Moving the case to another account would strand its current
+            // primary contact. Never reassign silently: the caller must
+            // supply a contact linked to the new account, or clear it (null).
+            return res.status(400).json({
+              error: "primary_contact_not_linked_to_account",
+              message:
+                "The case's primary contact is not linked to the new account. " +
+                "Supply a primaryContactId linked to that account, or set it to null.",
+            });
+          }
+          return res.status(400).json({ error: "contact_not_linked_to_account" });
+        }
+      }
+
       Object.assign(c, body, { updatedAt: new Date().toISOString() });
       res.json(caseWithRelations(c));
     }),
