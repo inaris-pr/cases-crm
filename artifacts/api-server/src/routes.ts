@@ -134,6 +134,23 @@ const EMPTY_GRAPH: AutomationGraph = { nodes: [], edges: [], viewport: null };
  * "customer" object for backwards-compatibility with the existing frontend.
  * The customer object presents the account+contact as the legacy flat record
  * so older pages keep rendering until they're refactored.
+ *
+ * STAND-IN CONTACT (known debt — behaviour intentionally unchanged):
+ * `primaryContact` is NOT always the case's primary contact. When
+ * `primaryContactId` is null, or names a contact that no longer exists, it
+ * falls back to the account's primary (or first linked) contact. Only
+ * `primaryContactId` is authoritative.
+ *   Depends on the fallback (a name to show in a "Customer" slot):
+ *     `customer.name/email/phone` → Cases table + Cards "Customer" column
+ *     (CasesList.tsx), Dashboard recent cases, Insights "top customers".
+ *   Deliberately ignores it: Case Detail links and the board's case modal
+ *     (cases/src/lib/caseLinks.ts check primaryContact.id === primaryContactId).
+ *   No frontend code reads `primaryContact` directly any more.
+ * Future cleanup: return `primaryContact` only for a real primaryContactId,
+ * and have the pages above show the Account (or "No primary contact")
+ * instead of a borrowed name. That changes what those pages display, so it
+ * needs its own decision. Tests pinning the current fallback:
+ * case-links.test.ts, case-update-validation.test.ts.
  */
 function caseWithRelations(c: Case) {
   const account = store.accounts.find((a) => a.id === c.accountId) ?? null;
