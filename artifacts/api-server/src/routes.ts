@@ -274,6 +274,23 @@ export function registerRoutes(app: Express) {
       const account = store.accounts.find((a) => a.id === accountId);
       if (!account) return res.status(400).json({ error: "unknown_account" });
 
+      // A case's primary contact must be a real person actively linked to the
+      // case's account. Without this check any contact id was accepted, so a
+      // case could be filed under one company with a stranger as its contact.
+      if (body.primaryContactId !== undefined) {
+        const contact = store.contacts.find((c) => c.id === body.primaryContactId);
+        if (!contact) return res.status(400).json({ error: "unknown_contact" });
+        const linked = store.accountContactLinks.some(
+          (l) =>
+            l.accountId === accountId &&
+            l.contactId === body.primaryContactId &&
+            !l.endedAt,
+        );
+        if (!linked) {
+          return res.status(400).json({ error: "contact_not_linked_to_account" });
+        }
+      }
+
       const now = new Date().toISOString();
       const created: Case = {
         id: nextCaseId(),

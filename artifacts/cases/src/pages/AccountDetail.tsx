@@ -10,6 +10,7 @@ import {
   Mail,
   Phone,
   ExternalLink,
+  Plus,
 } from "lucide-react";
 import { API, fetchJson } from "@/lib/api";
 import type { AccountDetail as AccountDetailT, Address } from "@/lib/api";
@@ -17,6 +18,8 @@ import { StatusBadge, PriorityBadge } from "@/components/ui/Badge";
 import { EditableField, EditableCheckbox } from "@/components/ui/EditableField";
 import { formatDate } from "@/lib/format";
 import { cn } from "@/lib/cn";
+import { Button } from "@/components/ui/Button";
+import { NewCaseDrawer } from "@/components/cases/NewCaseDrawer";
 
 type Tab = "details" | "contacts" | "cases";
 
@@ -63,6 +66,7 @@ export function AccountDetail() {
   const id = Number(params.id);
   const qc = useQueryClient();
   const [tab, setTab] = useState<Tab>("details");
+  const [newCaseOpen, setNewCaseOpen] = useState(false);
 
   const accountQuery = useQuery({
     queryKey: ["account", id],
@@ -146,8 +150,20 @@ export function AccountDetail() {
               <Metric label="Total cases" value={a.caseCount} />
             </div>
           </div>
+          <Button onClick={() => setNewCaseOpen(true)} className="shrink-0">
+            <Plus size={14} />
+            New Case
+          </Button>
         </div>
       </div>
+
+      <NewCaseDrawer
+        open={newCaseOpen}
+        onClose={() => setNewCaseOpen(false)}
+        context={{ kind: "account", accountId: a.id, accountName: a.name }}
+        // Land on the Cases tab so the new case is visible straight away.
+        onCreated={() => setTab("cases")}
+      />
 
       {/* Tabs */}
       <div className="flex items-center gap-0 border-b border-white/5">

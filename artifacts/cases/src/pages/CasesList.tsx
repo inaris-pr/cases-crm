@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useRef, useState } from "react";
 import { Link, useLocation } from "wouter";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import {
   Folder,
   FolderKanban,
@@ -17,17 +17,16 @@ import type {
   CaseStatus,
   CasePriority,
   CaseWithCustomer,
-  CustomerWithCounts,
   Case,
 } from "@/lib/api";
 import { StatusBadge, PriorityBadge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
-import { Input, Label, Select, Textarea } from "@/components/ui/Input";
-import { Modal } from "@/components/ui/Modal";
+import { Input, Label, Select } from "@/components/ui/Input";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { formatDate } from "@/lib/format";
 import { cn } from "@/lib/cn";
 import { CasesBoard } from "./CasesBoard";
+import { NewCaseDrawer } from "@/components/cases/NewCaseDrawer";
 
 type View = "table" | "cards" | "board";
 
@@ -423,163 +422,3 @@ function CaseCard({ caseItem }: { caseItem: CaseWithCustomer }) {
   );
 }
 
-function NewCaseDrawer({
-  open,
-  onClose,
-  initialStatus,
-}: {
-  open: boolean;
-  onClose: () => void;
-  initialStatus?: CaseStatus;
-}) {
-  const qc = useQueryClient();
-  const customers = useQuery({
-    queryKey: ["customers"],
-    queryFn: () => fetchJson<CustomerWithCounts[]>(API("/api/customers")),
-    enabled: open,
-  });
-  const [form, setForm] = useState({
-    title: "",
-    customerId: 0,
-    status: (initialStatus ?? "intake") as CaseStatus,
-    priority: "medium" as CasePriority,
-    description: "",
-    tags: "",
-  });
-
-  // Sync status when the drawer opens with a different initial status.
-  useEffect(() => {
-    if (open && initialStatus) setForm((f) => ({ ...f, status: initialStatus }));
-  }, [open, initialStatus]);
-
-  const create = useMutation({
-    mutationFn: () =>
-      fetchJson<Case>(API("/api/cases"), {
-        method: "POST",
-        body: JSON.stringify({
-          ...form,
-          customerId: Number(form.customerId),
-          tags: form.tags
-            .split(",")
-            .map((s) => s.trim())
-            .filter(Boolean),
-        }),
-      }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["cases"] });
-      qc.invalidateQueries({ queryKey: ["stats"] });
-      setForm({
-        title: "",
-        customerId: 0,
-        status: initialStatus ?? "intake",
-        priority: "medium",
-        description: "",
-        tags: "",
-      });
-      onClose();
-    },
-  });
-
-  const canSubmit = form.title.trim() && form.customerId > 0 && !create.isPending;
-
-  return (
-    <Modal
-      open={open}
-      onClose={onClose}
-      title="New case"
-      description="Open a new matter and assign it to a customer."
-      drawer
-      widthClass="max-w-md"
-    >
-      <form
-        onSubmit={(e) => {
-          e.preventDefault();
-          if (canSubmit) create.mutate();
-        }}
-        className="space-y-4"
-      >
-        <div>
-          <Label>Title</Label>
-          <Input
-            value={form.title}
-            onChange={(e) => setForm({ ...form, title: e.target.value })}
-            placeholder="e.g. Series C term sheet review"
-            required
-          />
-        </div>
-        <div>
-          <Label>Customer</Label>
-          <Select
-            value={form.customerId || ""}
-            onChange={(e) => setForm({ ...form, customerId: Number(e.target.value) })}
-            required
-          >
-            <option value="" disabled>
-              Select a customer…
-            </option>
-            {(customers.data ?? []).map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name} {c.company ? `· ${c.company}` : ""}
-              </option>
-            ))}
-          </Select>
-        </div>
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <Label>Status</Label>
-            <Select
-              value={form.status}
-              onChange={(e) => setForm({ ...form, status: e.target.value as CaseStatus })}
-            >
-              <option value="intake">Open</option>
-              <option value="in_progress">Working</option>
-              <option value="review">Pending Customer</option>
-              <option value="waiting">Waiting on 3rd Party</option>
-              <option value="completed">Closed</option>
-            </Select>
-          </div>
-          <div>
-            <Label>Priority</Label>
-            <Select
-              value={form.priority}
-              onChange={(e) => setForm({ ...form, priority: e.target.value as CasePriority })}
-            >
-              <option value="low">Low</option>
-              <option value="medium">Medium</option>
-              <option value="high">High</option>
-              <option value="critical">Critical</option>
-            </Select>
-          </div>
-        </div>
-        <div>
-          <Label>Description</Label>
-          <Textarea
-            rows={4}
-            value={form.description}
-            onChange={(e) => setForm({ ...form, description: e.target.value })}
-            placeholder="Summarize the matter…"
-          />
-        </div>
-        <div>
-          <Label>Tags (comma separated)</Label>
-          <Input
-            value={form.tags}
-            onChange={(e) => setForm({ ...form, tags: e.target.value })}
-            placeholder="financing, term-sheet"
-          />
-        </div>
-        <div className="flex justify-end gap-2 pt-2">
-          <Button variant="ghost" type="button" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button type="submit" disabled={!canSubmit}>
-            {create.isPending ? "Creating…" : "Create case"}
-          </Button>
-        </div>
-        {create.error && (
-          <p className="text-xs text-red-400">{String(create.error.message ?? create.error)}</p>
-        )}
-      </form>
-    </Modal>
-  );
-}

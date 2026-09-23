@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { Link, useParams } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -8,12 +9,15 @@ import {
   FolderKanban,
   ChevronLeft,
   Star,
+  Plus,
 } from "lucide-react";
 import { API, fetchJson } from "@/lib/api";
 import type { ContactDetail as ContactDetailT } from "@/lib/api";
 import { StatusBadge, PriorityBadge } from "@/components/ui/Badge";
 import { Avatar } from "@/components/ui/Avatar";
 import { formatDate } from "@/lib/format";
+import { Button } from "@/components/ui/Button";
+import { NewCaseDrawer } from "@/components/cases/NewCaseDrawer";
 
 export function ContactDetail() {
   const params = useParams<{ id: string }>();
@@ -24,6 +28,8 @@ export function ContactDetail() {
     queryFn: () => fetchJson<ContactDetailT>(API(`/api/contacts/${id}`)),
     enabled: Number.isFinite(id),
   });
+
+  const [newCaseOpen, setNewCaseOpen] = useState(false);
 
   const c = contactQuery.data;
 
@@ -76,8 +82,18 @@ export function ContactDetail() {
               <span>Owned by {c.ownerName}</span>
             </div>
           </div>
+          <Button onClick={() => setNewCaseOpen(true)} className="shrink-0">
+            <Plus size={14} />
+            New Case
+          </Button>
         </div>
       </div>
+
+      <NewCaseDrawer
+        open={newCaseOpen}
+        onClose={() => setNewCaseOpen(false)}
+        context={{ kind: "client", contactId: c.id, contactName: c.fullName }}
+      />
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         {/* Linked accounts */}
