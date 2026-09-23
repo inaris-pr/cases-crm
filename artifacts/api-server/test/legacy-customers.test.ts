@@ -16,7 +16,17 @@ describe("GET /api/customers — legacy projection", () => {
 
     expect(body).toHaveLength(17);
     expect(Object.keys(body[0]).sort()).toEqual(
-      ["caseCount", "company", "createdAt", "email", "id", "name", "ownerName", "phone"].sort(),
+      [
+        "caseCount",
+        "company",
+        "createdAt",
+        "email",
+        "id",
+        "name",
+        "ownerName",
+        "phone",
+        "primaryContactId", // added: the Contact behind `name`, for client links
+      ].sort(),
     );
   });
 

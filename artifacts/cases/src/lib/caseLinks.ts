@@ -85,3 +85,42 @@ export function caseClientLink(c: CaseLinkSource): CaseClientLink {
   }
   return { kind: "unresolved", contactId, label: `Client #${contactId}` };
 }
+
+// ── Account-level cards (legacy /api/customers rows) ────────────────────────
+//
+// The Kanban board's client card is one row of GET /api/customers, which is an
+// ACCOUNT projected into the old flat Customer shape: `id` is the Account id,
+// `company` the Account name, and `name` the name of the account's primary
+// Contact (or the Account name when it has none). `primaryContactId` is the id
+// of that same Contact, so the name and its link always describe one record.
+
+export interface AccountCardSource {
+  id: number;
+  name: string;
+  company: string | null;
+  primaryContactId: number | null;
+}
+
+export interface AccountCardLinks {
+  /** The company. Always present: the row IS an Account. */
+  account: RecordLink;
+  /** The Contact named on the card, or null when the account has none. */
+  client: RecordLink | null;
+}
+
+export function accountCardLinks(row: AccountCardSource): AccountCardLinks {
+  const company = (row.company ?? "").trim();
+  return {
+    account: {
+      href: accountDetailPath(row.id),
+      label: company || `Account #${row.id}`,
+    },
+    client:
+      row.primaryContactId == null
+        ? null
+        : {
+            href: clientDetailPath(row.primaryContactId),
+            label: row.name.trim() || `Client #${row.primaryContactId}`,
+          },
+  };
+}

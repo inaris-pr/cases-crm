@@ -219,6 +219,12 @@ export interface Customer {
 
 export interface CustomerWithCounts extends Customer {
   caseCount: number;
+  /**
+   * The Contact whose name/email/phone this row shows, or null when the
+   * account has no linked contact. `id` is the Account id — never use it as a
+   * Contact id.
+   */
+  primaryContactId: number | null;
 }
 
 export interface CaseWithRelations extends Case {

@@ -22,6 +22,7 @@ import {
 } from "lucide-react";
 import { AnimatePresence, motion } from "framer-motion";
 import { API, fetchJson } from "@/lib/api";
+import { caseClientLink } from "@/lib/caseLinks";
 import type {
   Case,
   CaseContact,
@@ -369,7 +370,8 @@ function OverviewTab({
   threadCount: number;
 }) {
   const meta = STATUS_META[caseDetail.status];
-  const customer = caseDetail.customer;
+  // Built from primaryContactId — `customer.id` is the Account id.
+  const client = caseClientLink(caseDetail);
   return (
     <div className="space-y-2.5">
       <div className="rounded-lg border border-white/8 bg-white/[0.025] p-3">
@@ -382,9 +384,9 @@ function OverviewTab({
         <Stat label="Status" value={meta.label} color={meta.color} />
         <Stat
           label="Client"
-          value={customer?.name ?? "—"}
+          value={client.kind === "linked" ? client.link.label : client.kind === "unresolved" ? client.label : "—"}
           color="#3b82f6"
-          link={customer ? `/clients/${customer.id}` : undefined}
+          link={client.kind === "linked" ? client.link.href : undefined}
         />
         <Stat label="Contacts" value={contactCount} color="#a855f7" />
         <Stat label="Documents" value={caseDetail.documents.length} color="#f59e0b" />

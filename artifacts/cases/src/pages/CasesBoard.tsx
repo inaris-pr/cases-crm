@@ -33,6 +33,7 @@ import { Button } from "@/components/ui/Button";
 import { CaseDetailModal } from "@/components/CaseDetailModal";
 import { cn } from "@/lib/cn";
 import { initials, colorFromString } from "@/lib/format";
+import { accountCardLinks } from "@/lib/caseLinks";
 
 // ── Geometry ────────────────────────────────────────────────────────────────
 const CLIENT_W = 340;
@@ -626,6 +627,12 @@ function ClientCard({
   onMouseDown: (e: React.MouseEvent) => void;
 }) {
   const accent = colorFromString(customer.name);
+  // This card is an ACCOUNT (a /api/customers row): `customer.id` is the
+  // Account id. The name shown is the account's primary Contact, linked by
+  // that Contact's own id.
+  const links = accountCardLinks(customer);
+  // Links sit on a draggable card: keep a press on them from starting a drag.
+  const stop = (e: React.SyntheticEvent) => e.stopPropagation();
   return (
     <div
       onMouseDown={onMouseDown}
@@ -658,16 +665,38 @@ function ClientCard({
         <div className="min-w-0 flex-1">
           <div className="label-eyebrow mb-1">Client profile</div>
           <div className="text-xl font-bold text-white truncate leading-tight">
-            {customer.name}
+            {links.client ? (
+              <Link href={links.client.href}>
+                <a
+                  onMouseDown={stop}
+                  onClick={stop}
+                  title="Open client"
+                  className="hover:underline cursor-pointer"
+                >
+                  {links.client.label}
+                </a>
+              </Link>
+            ) : (
+              customer.name
+            )}
           </div>
           <div className="text-xs text-white/40 truncate mt-0.5">
-            {customer.company ?? "—"}
+            <Link href={links.account.href}>
+              <a
+                onMouseDown={stop}
+                onClick={stop}
+                title="Open account"
+                className="hover:text-white/80 hover:underline cursor-pointer"
+              >
+                {links.account.label}
+              </a>
+            </Link>
           </div>
         </div>
-        <Link href={`/clients/${customer.id}`}>
+        <Link href={links.account.href}>
           <a
-            onMouseDown={(e) => e.stopPropagation()}
-            onClick={(e) => e.stopPropagation()}
+            onMouseDown={stop}
+            onClick={stop}
             title="Open full portfolio"
             className="text-white/30 hover:text-white p-1 rounded-md hover:bg-white/5 shrink-0"
           >

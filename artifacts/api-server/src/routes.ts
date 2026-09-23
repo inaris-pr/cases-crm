@@ -1578,7 +1578,11 @@ export function registerRoutes(app: Express) {
   function legacyCustomerView(a: Account) {
     const primary = primaryContactForAccount(a.id);
     return {
+      // `id` is the ACCOUNT id. `primaryContactId` is the Contact whose name,
+      // email and phone fill this row (null when the account has no linked
+      // contact) — use it, never `id`, to link to /clients/:id.
       id: a.id,
+      primaryContactId: primary?.id ?? null,
       name: primary ? contactFullName(primary) : a.name,
       email: primary?.email ?? null,
       phone: primary?.phone ?? null,
