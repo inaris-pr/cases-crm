@@ -48,6 +48,7 @@ import { cn } from "@/lib/cn";
 import { formatDate, formatBytes, formatRelative } from "@/lib/format";
 
 import { recordsPath } from "@/lib/records";
+import { caseAccountLink, caseClientLink } from "@/lib/caseLinks";
 // MY_NAME is now derived from the auth context inside each component that needs it.
 
 const CHANNEL_META: Record<ContactChannel, { label: string; icon: any; color: string }> = {
@@ -408,6 +409,48 @@ function OverviewTab({
   );
 }
 
+// ── Client / Account links ──────────────────────────────────────────────────
+// Each link is built from its own id (primaryContactId / accountId) by
+// lib/caseLinks — never from the legacy `customer` projection, whose id is
+// the Account id.
+function CaseRecordLinks({ caseDetail }: { caseDetail: CaseDetailType }) {
+  const client = caseClientLink(caseDetail);
+  const account = caseAccountLink(caseDetail);
+  const linkClass =
+    "text-sm font-semibold text-white hover:underline inline-flex items-center gap-1.5";
+  return (
+    <>
+      <div data-testid="case-client">
+        <div className="text-xs text-white/50 mb-0.5">Client</div>
+        {client.kind === "linked" ? (
+          <Link href={client.link.href}>
+            <a className={linkClass} title="Open client">
+              {client.link.label}
+              <ExternalLink size={11} className="text-white/40" />
+            </a>
+          </Link>
+        ) : client.kind === "unresolved" ? (
+          <div className="text-sm text-white/50" title="This contact record could not be found">
+            {client.label} <span className="text-xs text-white/35">(not found)</span>
+          </div>
+        ) : (
+          <div className="text-sm text-white/40">No primary contact</div>
+        )}
+      </div>
+
+      <div data-testid="case-account">
+        <div className="text-xs text-white/50 mb-0.5">Account</div>
+        <Link href={account.href}>
+          <a className={linkClass} title="Open account">
+            {account.label}
+            <ExternalLink size={11} className="text-white/40" />
+          </a>
+        </Link>
+      </div>
+    </>
+  );
+}
+
 // ── Details sidebar ─────────────────────────────────────────────────────────
 function DetailsCard({
   caseDetail,
@@ -422,20 +465,7 @@ function DetailsCard({
     <div className="rounded-xl border border-white/8 bg-white/[0.025] p-4 space-y-4">
       <div className="label-eyebrow">Details</div>
 
-      {caseDetail.customer && (
-        <div>
-          <div className="text-xs text-white/50 mb-0.5">Customer</div>
-          <Link href={`/clients/${caseDetail.customer.id}`}>
-            <a className="text-sm font-semibold text-white hover:underline inline-flex items-center gap-1.5">
-              {caseDetail.customer.name}
-              <ExternalLink size={11} className="text-white/40" />
-            </a>
-          </Link>
-          {caseDetail.customer.company && (
-            <div className="text-xs text-white/40 mt-0.5">{caseDetail.customer.company}</div>
-          )}
-        </div>
-      )}
+      <CaseRecordLinks caseDetail={caseDetail} />
 
       <div>
         <div className="text-xs text-white/50 mb-0.5">Created At</div>
