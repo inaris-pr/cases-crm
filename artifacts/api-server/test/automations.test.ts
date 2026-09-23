@@ -437,6 +437,133 @@ describe("customizing a global for one case", () => {
   });
 });
 
+describe("editing a global automation", () => {
+  const EDITED = {
+    nodes: [
+      { id: "g1", type: "trigger", x: 0, y: 0, config: { event: "case.updated" } },
+      { id: "g2", type: "assign", x: 300, y: 0, config: { assignee: "team:renewals" } },
+      { id: "g3", type: "notify", x: 600, y: 0, config: { channel: "email", message: "assigned" } },
+    ],
+    edges: [
+      { from: "g1", to: "g2" },
+      { from: "g2", to: "g3" },
+    ],
+    viewport: null,
+  };
+
+  it("saves a renamed and re-graphed global", async () => {
+    const shared = await createGlobal("Editable global");
+
+    const saved = (
+      await request(app)
+        .patch(`/api/automations/${shared.id}`)
+        .set(asMe)
+        .send({ name: "Editable global renamed", graph: EDITED })
+        .expect(200)
+    ).body;
+
+    expect(saved).toMatchObject({ id: shared.id, scope: "global", caseId: null });
+    expect(saved.name).toBe("Editable global renamed");
+    expect(saved.graph).toEqual(EDITED);
+    expect(saved.lastModifiedByName).toBe(ME);
+  });
+
+  it("persists across a reopen rather than only in the response", async () => {
+    const shared = await createGlobal("Reopen me");
+    await request(app)
+      .patch(`/api/automations/${shared.id}`)
+      .set(asMe)
+      .send({ name: "Reopened", graph: EDITED })
+      .expect(200);
+
+    const reopened = (await request(app).get(`/api/automations/${shared.id}`).expect(200)).body;
+    expect(reopened.name).toBe("Reopened");
+    expect(reopened.graph).toEqual(EDITED);
+    expect(reopened.graph.nodes).toHaveLength(3);
+  });
+
+  it("shows the update in every other case without duplicating the record", async () => {
+    const shared = await createGlobal("Seen everywhere");
+    await request(app)
+      .patch(`/api/automations/${shared.id}`)
+      .set(asMe)
+      .send({ name: "Seen everywhere v2", graph: EDITED })
+      .expect(200);
+
+    for (const caseId of [2, 3, 11, 14]) {
+      const rows = await listFor(caseId);
+      const hits = rows.filter((r) => r.id === shared.id);
+      expect(hits).toHaveLength(1); // one shared row, never copied per case
+      expect(hits[0]).toMatchObject({
+        name: "Seen everywhere v2",
+        scope: "global",
+        nodeCount: 3,
+        edgeCount: 2,
+      });
+
+      // And the graph itself resolves from that other case.
+      const detail = (await request(app).get(`/api/automations/${shared.id}`).expect(200)).body;
+      expect(detail.graph).toEqual(EDITED);
+    }
+
+    const globals = (await request(app).get("/api/automations?scope=global").expect(200)).body;
+    expect(globals.filter((g: any) => g.id === shared.id)).toHaveLength(1);
+  });
+
+  it("leaves a case's customized copy untouched", async () => {
+    const shared = await createGlobal("Edited after a fork");
+    const fork = (
+      await request(app).post(`/api/automations/${shared.id}/fork`).set(asMe).send({ caseId: 12 }).expect(201)
+    ).body;
+
+    await request(app)
+      .patch(`/api/automations/${shared.id}`)
+      .set(asMe)
+      .send({ name: "Global moved on", graph: EDITED })
+      .expect(200);
+
+    const forkAfter = (await request(app).get(`/api/automations/${fork.id}`).expect(200)).body;
+    expect(forkAfter.name).toBe("Edited after a fork (this case)");
+    expect(forkAfter.graph).toEqual(GRAPH);
+    expect(forkAfter.scope).toBe("case");
+
+    // Case 12 still sees its own copy, not the edited global.
+    const rows = await listFor(12);
+    expect(rows.find((r) => r.id === shared.id)).toBeUndefined();
+    expect(rows.find((r) => r.id === fork.id)).toBeTruthy();
+  });
+
+  it("reports the blast radius the confirmation shows", async () => {
+    const shared = await createGlobal("Counted global");
+    await request(app).post(`/api/automations/${shared.id}/fork`).set(asMe).send({ caseId: 13 }).expect(201);
+
+    const usage = (await request(app).get(`/api/automations/${shared.id}/usage`).expect(200)).body;
+    expect(usage.scope).toBe("global");
+    expect(usage.forkedByCaseCount).toBe(1);
+    // The forking case is excluded from the count of cases the edit reaches.
+    expect(usage.caseCount).toBeGreaterThan(0);
+  });
+
+  it("still saves a case-scoped automation exactly as before", async () => {
+    const own = await createCaseAutomation(14, "Unchanged case save");
+
+    const saved = (
+      await request(app)
+        .patch(`/api/automations/${own.id}`)
+        .set(asMe)
+        .send({ name: "Unchanged case save v2", graph: EDITED })
+        .expect(200)
+    ).body;
+
+    expect(saved).toMatchObject({ scope: "case", caseId: 14, name: "Unchanged case save v2" });
+    expect(saved.graph).toEqual(EDITED);
+
+    const reopened = (await request(app).get(`/api/automations/${own.id}`).expect(200)).body;
+    expect(reopened.graph).toEqual(EDITED);
+    expect(names(await listFor(15))).not.toContain("Unchanged case save v2");
+  });
+});
+
 describe("reverting a customized automation to the global", () => {
   it("deletes the fork and restores the inherited original", async () => {
     const shared = await createGlobal("Revert: restore");

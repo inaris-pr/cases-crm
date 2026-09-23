@@ -2,7 +2,13 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus, Play, Save, Trash2, Move, Globe, Building2, Workflow as WorkflowIcon } from "lucide-react";
 import { API, fetchJson } from "@/lib/api";
-import type { Automation, AutomationGraph, AutomationScope, AutomationSummary } from "@/lib/api";
+import type {
+  Automation,
+  AutomationGraph,
+  AutomationScope,
+  AutomationSummary,
+  AutomationUsage,
+} from "@/lib/api";
 import { Button } from "@/components/ui/Button";
 import { Input, Label } from "@/components/ui/Input";
 import { Modal } from "@/components/ui/Modal";
@@ -53,6 +59,7 @@ export function CaseAutomationsTab({ caseId, onDirtyChange }: CaseAutomationsTab
   const [newName, setNewName] = useState("");
   const [newScope, setNewScope] = useState<AutomationScope>("case");
   const [confirmGlobal, setConfirmGlobal] = useState(false);
+  const [confirmSaveOpen, setConfirmSaveOpen] = useState(false);
   const [pendingSelectId, setPendingSelectId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -65,6 +72,13 @@ export function CaseAutomationsTab({ caseId, onDirtyChange }: CaseAutomationsTab
     queryKey: ["automation", selectedId],
     queryFn: () => fetchJson<Automation>(API(`/api/automations/${selectedId}`)),
     enabled: selectedId !== null,
+  });
+
+  // Only fetched while the confirmation is open, so it is always current.
+  const usageQ = useQuery({
+    queryKey: ["automation-usage", selectedId],
+    queryFn: () => fetchJson<AutomationUsage>(API(`/api/automations/${selectedId}/usage`)),
+    enabled: confirmSaveOpen && selectedId !== null,
   });
 
   const automations = useMemo(() => listQ.data ?? [], [listQ.data]);
@@ -138,8 +152,12 @@ export function CaseAutomationsTab({ caseId, onDirtyChange }: CaseAutomationsTab
       const next: Draft = { name: saved.name, graph: saved.graph };
       setDraft(next);
       setBaseline(fingerprint(next));
-      qc.invalidateQueries({ queryKey: ["case-automations", caseId] });
+      // A global is one shared row, so every case's list is now stale.
+      qc.invalidateQueries({
+        queryKey: saved.scope === "global" ? ["case-automations"] : ["case-automations", caseId],
+      });
       qc.invalidateQueries({ queryKey: ["automation", saved.id] });
+      setConfirmSaveOpen(false);
       setError(null);
     },
     onError: (e: Error) => setError(e.message || "Could not save the automation."),
@@ -160,6 +178,19 @@ export function CaseAutomationsTab({ caseId, onDirtyChange }: CaseAutomationsTab
       return;
     }
     create.mutate({ name: newNameTrimmed, scope: newScope });
+  }
+
+  /**
+   * Editing a global changes it for every case, so saving one confirms first.
+   * Cancelling leaves the draft exactly as it is — no edits are discarded.
+   */
+  function requestSave() {
+    if (!draft || !canSave) return;
+    if (isGlobal) {
+      setConfirmSaveOpen(true);
+      return;
+    }
+    save.mutate(draft);
   }
 
   function requestSelect(id: number) {
@@ -200,7 +231,7 @@ export function CaseAutomationsTab({ caseId, onDirtyChange }: CaseAutomationsTab
     newNameTrimmed.length > 0 &&
     automations.some((a) => a.name.trim().toLowerCase() === newNameTrimmed.toLowerCase());
 
-  const canSave = !isGlobal && dirty && !nameError && !save.isPending;
+  const canSave = dirty && !nameError && !save.isPending;
 
   return (
     <div className="space-y-3">
@@ -249,12 +280,12 @@ export function CaseAutomationsTab({ caseId, onDirtyChange }: CaseAutomationsTab
           <Button
             variant="outline"
             onClick={() => draft && setDraft({ ...draft, graph: { ...draft.graph, nodes: [], edges: [] } })}
-            disabled={!draft || isGlobal}
+            disabled={!draft}
           >
             <Trash2 size={14} />
             Clear
           </Button>
-          <Button onClick={() => draft && save.mutate(draft)} disabled={!canSave}>
+          <Button onClick={requestSave} disabled={!canSave}>
             <Save size={14} />
             {save.isPending ? "Saving…" : "Save"}
           </Button>
@@ -267,12 +298,12 @@ export function CaseAutomationsTab({ caseId, onDirtyChange }: CaseAutomationsTab
           <Globe size={15} className="text-amber-300 mt-0.5 shrink-0" />
           <div className="text-[12px] leading-relaxed">
             <span className="font-semibold text-amber-200">
-              This is a global automation, shared with every case.
+              This automation is shared with every case.
             </span>{" "}
             <span className="text-white/60">
-              Editing it here would change it for all cases, so it is read-only for now.
-              Applying an automation to all cases, customizing a global for this case and
-              reverting a customization are coming in the next step.
+              You can edit it here, and saving asks you to confirm first because the change
+              reaches every case using it. Cases that have customized their own copy are not
+              affected.
             </span>
           </div>
         </div>
@@ -286,11 +317,10 @@ export function CaseAutomationsTab({ caseId, onDirtyChange }: CaseAutomationsTab
             <Input
               value={draft.name}
               maxLength={NAME_MAX + 20}
-              disabled={isGlobal}
               onChange={(e) => setDraft({ ...draft, name: e.target.value })}
               placeholder="e.g. Renewal reminder"
             />
-            {nameError && !isGlobal && (
+            {nameError && (
               <div className="text-[11px] text-rose-300 mt-1">{nameError}</div>
             )}
             {!nameError && duplicateName && (
@@ -366,6 +396,7 @@ export function CaseAutomationsTab({ caseId, onDirtyChange }: CaseAutomationsTab
               available to all existing cases and automatically to every case created in
               future. Anyone editing it later changes it for every case.
             </p>
+            <InlineError message={create.isError ? error : null} />
             <div className="flex justify-end gap-2">
               <Button variant="outline" onClick={() => setConfirmGlobal(false)}>
                 Cancel
@@ -421,6 +452,7 @@ export function CaseAutomationsTab({ caseId, onDirtyChange }: CaseAutomationsTab
               </div>
             </div>
 
+            <InlineError message={create.isError ? error : null} />
             <div className="flex justify-end gap-2 pt-1">
               <Button variant="outline" onClick={closeNew}>
                 Cancel
@@ -431,6 +463,52 @@ export function CaseAutomationsTab({ caseId, onDirtyChange }: CaseAutomationsTab
             </div>
           </div>
         )}
+      </Modal>
+
+      {/* Saving a global reaches every case */}
+      <Modal
+        open={confirmSaveOpen}
+        onClose={() => setConfirmSaveOpen(false)}
+        title="Save changes to all cases?"
+        widthClass="max-w-md"
+      >
+        <div className="space-y-4">
+          <p className="text-[13px] text-white/70 leading-relaxed">
+            <span className="font-semibold text-white">{trimmedName}</span> is a global
+            automation. Saving updates it for{" "}
+            {usageQ.data ? (
+              <span className="font-semibold text-white">
+                {usageQ.data.caseCount} case{usageQ.data.caseCount === 1 ? "" : "s"}
+              </span>
+            ) : (
+              "every case using it"
+            )}
+            {usageQ.data && usageQ.data.forkedByCaseCount > 0 && (
+              <>
+                {" "}
+                <span className="text-white/50">
+                  ({usageQ.data.forkedByCaseCount} case
+                  {usageQ.data.forkedByCaseCount === 1 ? " has" : "s have"} customized their own
+                  copy and will not change)
+                </span>
+              </>
+            )}
+            .
+          </p>
+          <InlineError message={save.isError ? error : null} />
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" onClick={() => setConfirmSaveOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              onClick={() => draft && save.mutate(draft)}
+              disabled={save.isPending}
+            >
+              <Globe size={14} />
+              {save.isPending ? "Saving…" : "Save changes to all cases"}
+            </Button>
+          </div>
+        </div>
       </Modal>
 
       {/* Unsaved changes when switching automation */}
@@ -450,6 +528,19 @@ export function CaseAutomationsTab({ caseId, onDirtyChange }: CaseAutomationsTab
           </Button>
         </div>
       </Modal>
+    </div>
+  );
+}
+
+/**
+ * Errors from a mutation started inside a modal have to render inside that
+ * modal — the page-level banner sits behind the overlay and would be invisible.
+ */
+function InlineError({ message }: { message: string | null }) {
+  if (!message) return null;
+  return (
+    <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-[12px] text-rose-200">
+      {message}
     </div>
   );
 }
