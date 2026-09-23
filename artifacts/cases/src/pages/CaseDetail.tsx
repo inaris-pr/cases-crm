@@ -47,6 +47,7 @@ import { useMyName } from "@/lib/auth";
 import { cn } from "@/lib/cn";
 import { formatDate, formatBytes, formatRelative } from "@/lib/format";
 
+import { recordsPath } from "@/lib/records";
 // MY_NAME is now derived from the auth context inside each component that needs it.
 
 const CHANNEL_META: Record<ContactChannel, { label: string; icon: any; color: string }> = {
@@ -151,7 +152,7 @@ export function CaseDetail() {
   return (
     <div className="space-y-4">
       {/* Back link */}
-      <Link href="/cases">
+      <Link href={recordsPath("cases")}>
         <a className="inline-flex items-center gap-1 text-[11px] text-white/50 hover:text-white">
           <ArrowLeft size={11} />
           Back to Cases

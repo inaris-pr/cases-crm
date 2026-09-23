@@ -3,8 +3,7 @@ import { Link, useLocation } from "wouter";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   LayoutDashboard,
-  FolderKanban,
-  Users,
+  Layers,
   Calculator,
   LineChart,
   Settings as SettingsIcon,
@@ -13,20 +12,28 @@ import {
   PinOff,
   Activity,
   LogOut,
-  Building2,
   UserCircle2,
   Sparkles,
 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { useAuth } from "@/lib/auth";
 import { Avatar } from "@/components/ui/Avatar";
+import { isRecordsLocation, recordsPath } from "@/lib/records";
 
-const NAV = [
+interface NavItem {
+  label: string;
+  href: string;
+  icon: typeof LayoutDashboard;
+  /** Overrides prefix matching when a section spans several URL roots. */
+  isActive?: (location: string) => boolean;
+}
+
+const NAV: NavItem[] = [
   { label: "Dashboard", href: "/", icon: LayoutDashboard },
   { label: "Leads", href: "/leads", icon: Sparkles },
-  { label: "Accounts", href: "/accounts", icon: Building2 },
-  { label: "Clients", href: "/clients", icon: Users },
-  { label: "Cases", href: "/cases", icon: FolderKanban },
+  // Accounts, Clients and Cases are tabs of Records. Stay lit on their detail
+  // pages too, which keep their own /accounts/:id, /clients/:id, /cases/:id URLs.
+  { label: "Records", href: recordsPath(), icon: Layers, isActive: isRecordsLocation },
   { label: "Accounting", href: "/accounting", icon: Calculator },
   { label: "Insights", href: "/insights", icon: LineChart },
   { label: "Settings", href: "/settings", icon: SettingsIcon },
@@ -79,9 +86,10 @@ export function Sidebar() {
       <nav className="flex-1 py-3 px-2 space-y-1 overflow-hidden">
         {NAV.map((item) => {
           const Icon = item.icon;
-          const isActive =
-            location === item.href ||
-            (item.href !== "/" && location.startsWith(item.href));
+          const isActive = item.isActive
+            ? item.isActive(location)
+            : location === item.href ||
+              (item.href !== "/" && location.startsWith(item.href));
           return (
             <Link key={item.href} href={item.href}>
               <a

@@ -2,12 +2,11 @@ import { Redirect, Route, Switch } from "wouter";
 import { AuthProvider, useAuth } from "./lib/auth";
 import { AppLayout } from "./components/layout/AppLayout";
 import { Dashboard } from "./pages/Dashboard";
-import { CasesList } from "./pages/CasesList";
 import { CaseDetail } from "./pages/CaseDetail";
-import { Accounts } from "./pages/Accounts";
 import { AccountDetail } from "./pages/AccountDetail";
-import { Clients } from "./pages/Clients";
 import { ContactDetail } from "./pages/ContactDetail";
+import { Records } from "./pages/Records";
+import { LEGACY_LIST_ROUTES, recordsPath } from "./lib/records";
 import { Leads } from "./pages/Leads";
 import { Accounting } from "./pages/Accounting";
 import { Insights } from "./pages/Insights";
@@ -39,22 +38,29 @@ function Gate() {
       <Switch>
         <Route path="/" component={Dashboard} />
         <Route path="/leads" component={Leads} />
-        <Route path="/accounts" component={Accounts} />
+        {/* Records: Accounts, Clients and Cases as tabs of one workspace. */}
+        <Route path="/records">
+          <Redirect to={recordsPath()} replace />
+        </Route>
+        <Route path="/records/:tab" component={Records} />
+        {/* The old list URLs now open the matching Records tab, so bookmarks
+            keep working. replace avoids leaving a dead entry in history. */}
+        {LEGACY_LIST_ROUTES.map(([from, tab]) => (
+          <Route key={from} path={from}>
+            <Redirect to={recordsPath(tab)} replace />
+          </Route>
+        ))}
+        {/* Individual record pages are unchanged. */}
         <Route path="/accounts/:id" component={AccountDetail} />
-        <Route path="/clients" component={Clients} />
         <Route path="/clients/:id" component={ContactDetail} />
-        {/* Legacy aliases — keep old links working */}
-        <Route path="/customers" component={Clients} />
-        <Route path="/contacts" component={Clients} />
         <Route path="/contacts/:id" component={ContactDetail} />
-        <Route path="/cases" component={CasesList} />
         <Route path="/cases/:id" component={CaseDetail} />
         <Route path="/accounting" component={Accounting} />
         {/* Automations live inside a case (Case > Automations). The old
             standalone workspace is gone; keep the route so existing links
             land somewhere useful instead of on Not found. */}
         <Route path="/workflow">
-          <Redirect to="/cases" />
+          <Redirect to={recordsPath("cases")} replace />
         </Route>
         <Route path="/insights" component={Insights} />
         <Route path="/settings" component={Settings} />

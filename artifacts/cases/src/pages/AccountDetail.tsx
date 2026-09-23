@@ -21,6 +21,7 @@ import { cn } from "@/lib/cn";
 import { Button } from "@/components/ui/Button";
 import { NewCaseDrawer } from "@/components/cases/NewCaseDrawer";
 
+import { recordsPath } from "@/lib/records";
 type Tab = "details" | "contacts" | "cases";
 
 const RENEWAL_STATUS_OPTIONS = [
@@ -107,7 +108,7 @@ export function AccountDetail() {
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-2 text-xs text-white/50">
-        <Link href="/accounts">
+        <Link href={recordsPath("accounts")}>
           <a className="inline-flex items-center gap-1 hover:text-white">
             <ChevronLeft size={12} />
             Accounts

@@ -200,7 +200,10 @@ export function CasesBoard() {
   };
 
   return (
-    <div className="flex flex-col h-[calc(100vh-12rem)] overflow-hidden">
+    // The board fills the viewport below the page chrome. It now sits under the
+    // Records tab strip too (2.25rem) plus its 1rem gap, so the offset grows
+    // from 12rem by exactly 3.25rem to keep the board fitting as it did before.
+    <div className="flex flex-col h-[calc(100vh-15.25rem)] overflow-hidden">
       {/* Canvas */}
       <div
         ref={canvasRef}

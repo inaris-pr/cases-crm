@@ -19,6 +19,7 @@ import { formatDate } from "@/lib/format";
 import { Button } from "@/components/ui/Button";
 import { NewCaseDrawer } from "@/components/cases/NewCaseDrawer";
 
+import { recordsPath } from "@/lib/records";
 export function ContactDetail() {
   const params = useParams<{ id: string }>();
   const id = Number(params.id);
@@ -43,7 +44,7 @@ export function ContactDetail() {
   return (
     <div className="space-y-5">
       <div className="flex items-center gap-2 text-xs text-white/50">
-        <Link href="/clients">
+        <Link href={recordsPath("clients")}>
           <a className="inline-flex items-center gap-1 hover:text-white">
             <ChevronLeft size={12} />
             Clients

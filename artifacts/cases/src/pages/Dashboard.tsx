@@ -27,6 +27,7 @@ import { formatDate } from "@/lib/format";
 import { cn } from "@/lib/cn";
 import { useAuth } from "@/lib/auth";
 
+import { recordsPath } from "@/lib/records";
 function greeting() {
   const h = new Date().getHours();
   if (h < 12) return "Good morning";
@@ -195,7 +196,7 @@ export function Dashboard() {
         <div className="glass-panel p-4">
           <div className="flex items-center justify-between mb-3">
             <h2 className="text-sm font-semibold">Recent cases</h2>
-            <Link href="/cases">
+            <Link href={recordsPath("cases")}>
               <a className="text-xs text-[var(--color-primary)] inline-flex items-center gap-1 hover:underline">
                 View all <ArrowRight size={12} />
               </a>
@@ -228,7 +229,7 @@ export function Dashboard() {
         <div className="glass-panel p-4">
           <div className="flex items-center justify-between mb-3">
             <h2 className="text-sm font-semibold">Open tasks</h2>
-            <Link href="/cases">
+            <Link href={recordsPath("cases")}>
               <a className="text-xs text-[var(--color-primary)] inline-flex items-center gap-1 hover:underline">
                 View all <ArrowRight size={12} />
               </a>
