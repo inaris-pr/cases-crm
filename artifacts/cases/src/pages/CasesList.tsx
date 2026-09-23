@@ -11,6 +11,9 @@ import {
   SlidersHorizontal,
   MoreVertical,
   X as XIcon,
+  ArrowUp,
+  ArrowDown,
+  ChevronsUpDown,
 } from "lucide-react";
 import { API, fetchJson } from "@/lib/api";
 import type {
@@ -27,6 +30,16 @@ import { formatDate } from "@/lib/format";
 import { cn } from "@/lib/cn";
 import { CasesBoard } from "./CasesBoard";
 import { NewCaseDrawer } from "@/components/cases/NewCaseDrawer";
+import {
+  CASE_SORT_LABELS,
+  DEFAULT_CASE_SORT,
+  caseSortDirection,
+  describeCaseSort,
+  nextCaseSort,
+  sortCases,
+  type CaseSort,
+  type CaseSortColumn,
+} from "@/lib/caseSort";
 
 type View = "table" | "cards" | "board";
 
@@ -39,6 +52,9 @@ export function CasesList() {
   const [assignee, setAssignee] = useState<string>(""); // "" = all, otherwise teammate name
   const [open, setOpen] = useState(false);
   const [draftStatus, setDraftStatus] = useState<CaseStatus | undefined>(undefined);
+  // Table-only column sort. null = default (Last Modified, newest first).
+  const [sort, setSort] = useState<CaseSort>(DEFAULT_CASE_SORT);
+  const onSort = (column: CaseSortColumn) => setSort((s) => nextCaseSort(s, column));
 
   const team = useQuery({
     queryKey: ["team"],
@@ -130,16 +146,16 @@ export function CasesList() {
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="text-left text-[10px] uppercase tracking-widest text-white/40 border-b border-white/5">
-                      <th className="px-4 py-2.5 font-medium">Case #</th>
+                      <SortableTh column="caseNumber" sort={sort} onSort={onSort} className="px-4" />
                       <th className="px-3 py-2.5 font-medium">Title</th>
                       <th className="px-3 py-2.5 font-medium">Customer</th>
                       <th className="px-3 py-2.5 font-medium">Status</th>
                       <th className="px-3 py-2.5 font-medium">Priority</th>
-                      <th className="px-4 py-2.5 font-medium">Created</th>
+                      <SortableTh column="createdAt" sort={sort} onSort={onSort} className="px-4" />
                     </tr>
                   </thead>
                   <tbody>
-                    {(cases.data ?? []).map((c) => (
+                    {sortCases(cases.data ?? [], sort).map((c) => (
                       <Fragment key={c.id}>
                         <tr
                           onClick={() => navigate(`/cases/${c.id}`)}
@@ -181,6 +197,60 @@ export function CasesList() {
         initialStatus={draftStatus}
       />
     </div>
+  );
+}
+
+/**
+ * A clickable, sortable table header. Cycles ascending → descending → default
+ * (Last Modified) via lib/caseSort. Shows an up/down arrow in the primary
+ * colour only while this column is the active sort.
+ */
+function SortableTh({
+  column,
+  sort,
+  onSort,
+  className,
+}: {
+  column: CaseSortColumn;
+  sort: CaseSort;
+  onSort: (column: CaseSortColumn) => void;
+  className?: string;
+}) {
+  const direction = caseSortDirection(sort, column);
+  const label = CASE_SORT_LABELS[column];
+  const next = nextCaseSort(sort, column);
+  const title = `Sorted by: ${describeCaseSort(sort)}. Click to sort by ${describeCaseSort(next)}.`;
+  return (
+    <th
+      className={cn("py-2.5 font-medium", className)}
+      aria-sort={direction === "asc" ? "ascending" : direction === "desc" ? "descending" : "none"}
+    >
+      <button
+        type="button"
+        onClick={() => onSort(column)}
+        title={title}
+        data-testid={`sort-${column}`}
+        className={cn(
+          "group/sort inline-flex items-center gap-1 uppercase tracking-widest font-medium cursor-pointer select-none rounded transition-colors",
+          "hover:text-white/80 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-primary)]/60",
+          direction && "text-[var(--color-primary)] hover:text-[var(--color-primary)]",
+        )}
+      >
+        {label}
+        {direction === "asc" ? (
+          <ArrowUp size={11} strokeWidth={2.5} aria-hidden />
+        ) : direction === "desc" ? (
+          <ArrowDown size={11} strokeWidth={2.5} aria-hidden />
+        ) : (
+          // Affordance only (hover/focus), not a sort indicator.
+          <ChevronsUpDown
+            size={11}
+            aria-hidden
+            className="opacity-0 group-hover/sort:opacity-60 group-focus-visible/sort:opacity-60 transition-opacity"
+          />
+        )}
+      </button>
+    </th>
   );
 }
 
