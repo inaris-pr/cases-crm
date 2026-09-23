@@ -9,44 +9,118 @@ recovered working tree — the project had no repository, so there is no history
 
 ## [Unreleased]
 
+Everything since the recovery release, 2026-09-22 → 2026-09-23.
+State at the end of this section: typecheck clean, **262 tests in 20 files**.
+
 ### Added
-- **Automated API test suite** — Vitest + Supertest, **104 tests across 12
-  files** in `artifacts/api-server/test/`, derived from the 67-check
-  verification harness written during recovery. Covers auth, stats and team, leads, lead conversion
-  (a dedicated regression suite for the malformed-Account defect), accounts,
-  contacts and account-contact links, cases and every filter, case detail,
-  tasks, documents, interactions, thread, mentions, messages, the legacy
-  `/customers` projection, and the validation/404 contracts.
-- `test/isolation.test.ts`, which asserts the suite's own safety properties:
-  it runs from a throwaway working directory, writes its store there, cannot
-  reach `artifacts/api-server/data/store.json`, and starts every file from the
-  deterministic seed.
-- `pnpm test` at the root and in `@cases/api-server`, plus `test:watch`.
-- `artifacts/api-server/tsconfig.test.json`; the package's `typecheck` script
-  now covers the test sources as well as `src/`.
+
+#### Automated test suite (`b336b40`)
+- Vitest + Supertest in `artifacts/api-server/test/`, started at 104 tests in
+  12 files and grown with every change since. Derived from the 67-check
+  recovery harness.
+- `test/isolation.test.ts` asserts the suite runs in a throwaway directory
+  and can never read or write the live `store.json`.
+- `pnpm test` at the root and in `@cases/api-server`, plus `test:watch`;
+  `tsconfig.test.json`, and the package `typecheck` now covers tests too.
+
+#### Case Automations — management only (`f0a8745` → `9154b0a`)
+> Automation **execution is not implemented**. These changes let employees
+> create, organize and save workflows; nothing runs them. Execution is
+> postponed until the third-party integrations are chosen.
+- **Store model** `Automation` (`scope: "case" | "global"`, `caseId`,
+  `graph`, `enabled`, `derivedFromAutomationId`, `originCaseId`, audit
+  fields) and `normalizeLoaded()`, which back-fills missing collections and
+  id counters when an older `store.json` loads (previously a new collection
+  would have produced `NaN` ids). One global automation is seeded.
+- **API** — `GET/POST /cases/:id/automations`, `GET /automations`,
+  `GET/PATCH/DELETE /automations/:id`, `GET /automations/:id/usage`,
+  `POST /automations/:id/{promote,fork,revert}`. A case sees its own
+  automations plus every global it has not customized, computed at read time.
+- **Case Detail → Automations tab** (last tab; `#workflow` alias): selection
+  dropdown grouped "This case" / "Global", the visual builder extracted into
+  `AutomationBuilder`, named automations, save with viewport, unsaved-change
+  guards on automation switch, tab switch and page unload.
+- **Scope chosen at creation** — "this case" or "all cases"; a global is
+  created in one request after a confirmation.
+- **Globals are editable** from any case, with a "Save changes to all
+  cases?" confirmation showing how many cases are affected.
+- **Apply to all cases** (promote in place), **Customize for this case**
+  (fork), **Revert to global** (discard the fork), and **Delete** — a global
+  requires typing its name and lists affected and customized cases;
+  customized copies survive as independent automations.
+
+#### Contextual case creation (`b73d9f4`)
+- One shared New Case form (`NewCaseDrawer`) used by the Cases section,
+  Account pages and Client pages.
+- From an Account: account fixed, pick one of its contacts (a sole contact is
+  pre-selected). From a Client: client fixed, pick one of their accounts (a
+  sole account is pre-selected; clients with several companies choose). A
+  client with no account can be linked to one inline.
+- The contact's email and phone are shown read-only; they are not stored on
+  the case.
+- `POST /api/cases` now rejects an unknown contact (`unknown_contact`) or a
+  contact not actively linked to the account
+  (`contact_not_linked_to_account`).
+
+#### Records workspace (`d5c6f86`)
+- One **Records** sidebar entry with **Accounts | Clients | Cases** tabs at
+  `/records/:tab`, replacing three sidebar entries. Each tab renders the
+  existing page and views unchanged.
+- `/records`, `/accounts`, `/clients`, `/contacts`, `/customers` and `/cases`
+  redirect to the matching tab; detail URLs are unchanged; back links and
+  Dashboard links return to the right tab. Routing lives in `lib/records.ts`.
+
+#### Cases table sorting (`35e69ae`)
+- **Case #** and **Created** headers cycle ascending → descending → default,
+  one column at a time. Default is **Last Modified** (`updatedAt` newest
+  first, same as the API). Numeric case-number order, timestamp-based
+  Created order, deterministic ties, arrow indicators in the primary colour.
+  Table view only; client-side over the filtered results (`lib/caseSort.ts`).
 
 ### Changed
-- Default branch renamed `master` → `main`.
-- `artifacts/api-server` gains `vitest`, `supertest` and `@types/supertest` as
-  dev dependencies. No production dependency changed.
+- **Removed the standalone Automations page** and its sidebar entry
+  (`6514437`); `/workflow` redirects to Records → Cases.
+- **`PATCH /api/cases/:id` validates relationships** (`e6a0fe3`) and now
+  accepts `accountId`. Rules: account must exist; a new or changed contact
+  must exist and be actively linked to the resulting account; moving a case
+  away from an account its contact belongs to requires a linked replacement
+  or clearing the contact (`primary_contact_not_linked_to_account`). Partial
+  updates that leave the relationship alone are unaffected; nothing is
+  written on rejection.
+- `/api/customers` rows gain `primaryContactId` — the contact whose name the
+  row already shows (`5ba4119`).
+- Default branch renamed `master` → `main`. `artifacts/api-server` gains
+  `vitest`, `supertest`, `@types/supertest` as dev dependencies.
 
 ### Fixed
-- Documentation had recorded "1 conversation" as seed content (and the README
-  "a team message thread"). Both were read off the runtime `store.json` rather
-  than the seed: `store.ts` creates **no** conversations or messages, because
-  its only `conversations.push()` is inside the never-called
-  `findOrCreateDm()`. Corrected in `CLAUDE_HANDOFF.md`, `README.md` and
-  `CLAUDE.md`.
+- **Case Detail client link used the Account id** (`979a6f7`). It linked to
+  `/clients/{accountId}`, opening the wrong person (e.g. CASE-004 opened
+  Robert Chen instead of Sofia Mendoza). Now separate **Client**
+  (`primaryContactId`) and **Account** (`accountId`) links; no client link is
+  invented for a case without a primary contact.
+- **Board (Kanban) links used the Account id as a Contact id** (`5ba4119`) —
+  the client card's "Open full portfolio" icon and the board's case modal.
+  Company and portfolio now open the Account; the person's name opens their
+  Client page.
+- Order-dependence in `automations.test.ts` — tests no longer mutate the
+  shared seeded global (`878f286`).
+- Documentation had recorded "1 conversation" as seed content; the seed
+  creates none.
 
-### Notes
-- `POST /api/conversations` never calls the `findOrCreateDm()` helper that
-  `store.ts` exports, so duplicate DMs between the same two people are
-  reachable. The suite **pins this existing behaviour** rather than changing
-  it; fixing it is a deliberate decision, not a cleanup.
-- The test app helper duplicates the error handler from `src/index.ts`.
-  Removing the duplication needs a production refactor (`createApp()`), which
-  was out of scope.
-- Feature development remains paused pending review.
+### Documentation
+- The server's stand-in `primaryContact` (filled from the account when a case
+  has no primary contact) is documented in code and in CLAUDE_HANDOFF.md
+  §6.2 (`2e07101`); behaviour unchanged.
+- CLAUDE.md, CLAUDE_HANDOFF.md, README.md and this file re-synchronized with
+  the repository.
+
+### Known issues
+See CLAUDE_HANDOFF.md §6. Highlights: automation execution not implemented;
+Customer → Account migration unfinished; stand-in primary contact; the
+Board's separate New Case form (no primary contact); duplicated case detail
+UI; Last Modified ignores activity (thread, tasks, documents…); table sort
+not persisted; JSON-file store, plaintext passwords, no real auth; stale
+`lib/*` packages; no CI or component tests.
 
 ---
 
