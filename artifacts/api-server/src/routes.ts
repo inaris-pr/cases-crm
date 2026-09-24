@@ -35,6 +35,7 @@ import {
   sessionTokenFrom,
 } from "./auth/sessions.js";
 import { loginThrottle } from "./auth/throttle.js";
+import { buildDashboard } from "./dashboard.js";
 import {
   store,
   seed,
@@ -2133,6 +2134,17 @@ export function buildApiRouter(): Router {
       }
       store.automations.splice(store.automations.indexOf(fork), 1);
       res.json({ restored: automationSummary(original) });
+    }),
+  );
+
+  // ── Dashboard (RBAC Phase 6) ────────────────────────────────────────────────
+  // One permission-composed response; see src/dashboard.ts for what each
+  // section needs and how it is scoped.
+  r.get(
+    "/dashboard",
+    allow("dashboard.view"),
+    asyncHandler(async (req, res) => {
+      res.json(buildDashboard(principalOf(req), store));
     }),
   );
 

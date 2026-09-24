@@ -10,7 +10,32 @@ recovered working tree — the project had no repository, so there is no history
 ## [Unreleased]
 
 Everything since the recovery release, 2026-09-22 → 2026-09-24.
-State at the end of this section: typecheck clean, **536 tests in 40 files**.
+State at the end of this section: typecheck clean, **583 tests in 43 files**;
+Playwright 39 tests.
+
+### Added — RBAC Phase 6: personalized role dashboards (2026-09-24)
+- **`GET /api/dashboard`**: one server-computed response whose sections
+  (cases, calls, leads, accounts, people, communication) are included only
+  with their permissions and computed over records in the caller's
+  own/team/all scope. Rules shared with the web app in lib/access
+  (`DASHBOARD_SECTION_REQUIREMENTS`, `DASHBOARD_WIDGETS`).
+- **Dashboard rebuilt as widgets composed by permission**: CSRs and
+  Operations Admins see their own case work; supervisors add a per-employee
+  workload table (open cases, high/critical, open and overdue tasks);
+  Business Advisors see their leads and accounts; BA Supervisors add leads
+  by advisor; HR sees employee and team aggregates only; the System Owner
+  sees the company. Several roles → the union. Loading skeletons, error
+  state with retry (never zeros), empty states.
+- **Case last activity** derived from the Case, call/contact logs,
+  comments, tasks and documents (`src/caseActivity.ts`) — shown as the
+  actual age; never stored; `Case.updatedAt` and existing sorting
+  unchanged.
+- Only real figures: revenue, commissions, goals, refunds, chargebacks,
+  conversions by advisor, resolution time and phone-system volumes are
+  deferred until the data exists (list in CLAUDE_HANDOFF.md).
+- Tests: 47 API/unit tests (dashboard scopes, sections by role, leakage,
+  HR aggregates, workload, breakdowns, task counts, last activity, zeros)
+  and 15 Playwright dashboard tests.
 
 ### Changed — reproducible browser-suite install (2026-09-24)
 - `e2e/package-lock.json` locks `@playwright/test` 1.56.1 and its

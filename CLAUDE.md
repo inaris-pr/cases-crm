@@ -37,8 +37,8 @@ Run from `cases-app/`. Requires Node ≥20 and pnpm 9.0.0 (`corepack prepare pnp
 | `pnpm dev:api` | API only |
 | `pnpm dev:web` | Frontend only (proxies /api to :3001) |
 | `pnpm typecheck` | tsc --noEmit across the workspace (API src + tests, web, lib/db, lib/access) — **must stay clean** |
-| `pnpm test` | Vitest + Supertest suite (40 files, 536 tests) — **must stay green** |
-| `pnpm test:e2e` | Playwright RBAC browser suite (e2e/, 24 tests; own API + Vite on 3101/5174, temp data) |
+| `pnpm test` | Vitest + Supertest suite (43 files, 583 tests) — **must stay green** |
+| `pnpm test:e2e` | Playwright RBAC + dashboard browser suite (e2e/, 39 tests; own API + Vite on 3101/5174, temp data) |
 | `pnpm build` | esbuild bundle for the API, `tsc -b && vite build` for the web |
 | `pnpm api:generate` | Orval regen from the OpenAPI spec — **do not run**; the spec is stale |
 
@@ -137,6 +137,17 @@ it, debounced, after every successful non-GET request.
   `ReassignControl` (candidates from `GET /api/owners/:type/candidates`).
   A new page or control needs its permission check here too — the API
   stays authoritative.
+- **The Dashboard is composed by permission (Phase 6)**: one endpoint,
+  `GET /api/dashboard` (`src/dashboard.ts`), returns only the sections the
+  caller may have (`DASHBOARD_SECTION_REQUIREMENTS` in lib/access), each
+  computed server-side over records in the caller's own/team/all scope.
+  The web app renders the widgets in `components/dashboard/widgets.tsx`
+  whose `DASHBOARD_WIDGETS` requirements hold — every widget requires its
+  section's permissions, so none can appear and then fail. **Only real
+  data**: no invented or estimated figures; a metric the data cannot
+  support stays out (see the deferred list in CLAUDE_HANDOFF.md).
+  "Last activity" is derived (`src/caseActivity.ts`) and never written to
+  the Case.
 - **`lib/access` is the single source of access rules** (Phase 2): role keys,
   the permission catalog, own/team/all scopes, role bundles, Account field
   groups with sensitive-read rules, Settings/Insights permissions, the
@@ -187,7 +198,7 @@ it, debounced, after every successful non-GET request.
 ## Tests
 
 `pnpm test` from the root, or `pnpm --filter @cases/api-server test`.
-Vitest + Supertest, in `artifacts/api-server/test/` — 40 files, 536 tests.
+Vitest + Supertest, in `artifacts/api-server/test/` — 43 files, 583 tests.
 
 - **Every request needs a session.** `test/helpers/app.ts` logs in through the
   real endpoint: `asMe` is Iris's session cookie, `loginAs(email)` returns

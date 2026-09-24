@@ -9,7 +9,9 @@ practice — leads, companies, the people behind them, and the matters in flight
 
 ## What's in it
 
-- **Dashboard** — live stats, recent cases, tasks, 30-day trend.
+- **Dashboard** — personalized by permissions: each employee sees only the
+  widgets their role allows (their cases, their team's workload, their leads,
+  employee figures for HR…), computed on the server from real records.
 - **Leads** — pipeline with conversion into an Account, Contact and optional
   first Case.
 - **Records** — one workspace with three tabs:
@@ -101,8 +103,8 @@ arrives with the role-based access phases.
 | `pnpm dev:api` | API only |
 | `pnpm dev:web` | Frontend only |
 | `pnpm typecheck` | TypeScript across the workspace — currently clean |
-| `pnpm test` | Test suite (Vitest + Supertest) — 536 tests in 40 files |
-| `pnpm test:e2e` | Playwright RBAC browser suite (e2e/) — 24 tests |
+| `pnpm test` | Test suite (Vitest + Supertest) — 583 tests in 43 files |
+| `pnpm test:e2e` | Playwright RBAC and dashboard browser suite (e2e/) — 39 tests |
 | `pnpm build` | Production builds for everything |
 | `pnpm api:generate` | Orval regen — **don't**, the spec it reads is stale |
 

@@ -9,7 +9,8 @@ file in the same change.
 identity foundation** (and its browser-login fix) and **RBAC Phase 2 —
 permission core**, **RBAC Phase 3 — backend enforcement** and **RBAC Phase 4 —
 stable ownership ids and real team scope** and **RBAC Phase 5 — role-aware
-frontend**. Typecheck clean; **536 tests across 40 files**, all passing. Default branch `main`, pushed to the private
+frontend** and **RBAC Phase 6 — personalized role dashboards**. Typecheck
+clean; **583 tests across 43 files**, all passing; Playwright 39 tests. Default branch `main`, pushed to the private
 remote `inaris-pr/cases-crm`.
 
 ---
@@ -44,6 +45,7 @@ Since recovery (all 2026-09-22/23, see CHANGELOG.md):
 | RBAC Phase 3 | Backend enforcement: a guard on every route, record scope, Account redaction and field groups, case/lead response shaping, private messages and mentions (§2 Enforcement) |
 | RBAC Phase 4 | Stable owner/author ids (store v2 migration), real team scope from stored teams, reassignment endpoints (§2 Ownership) |
 | RBAC Phase 5 | Role-aware frontend: sidebar, Records tabs, route guard, section and control gating, reassign UI, interim Dashboard; Playwright RBAC suite in CI (§2 Frontend access) |
+| RBAC Phase 6 | Personalized role dashboards: `GET /api/dashboard` with permission-gated, scope-computed sections; widget registry by permission; derived case last activity (§2 Dashboards) |
 
 ---
 
@@ -266,15 +268,74 @@ same lib/access rules the API enforces (`@cases/access`, a Vite alias):
 - **Reassign**: `ReassignControl` lists `GET /api/owners/:type/candidates`
   (active, can view that record type, inside the caller's assign scope)
   and sends `{ ownerUserId }`.
-- **Dashboard (interim)**: case metrics with `metrics.cases`, recent cases
-  and tasks with `cases.view`; employees with neither (Business Advisors,
-  HR) see only their real mentions, conversations and — with `leads.view` —
-  recent leads. No placeholder KPIs.
-- **Browser tests**: `e2e/` (Playwright, 24 tests, `pnpm test:e2e`) starts its
+- **Dashboard**: replaced by the Phase 6 dashboards (below).
+- **Browser tests**: `e2e/` (Playwright, 39 tests, `pnpm test:e2e`) starts its
   own API (fresh temp store via `CASES_DATA_DIR`) and Vite on 3101/5174;
   CI job `e2e`. e2e/ is outside the pnpm workspace; `@playwright/test` is
   pinned exactly in `e2e/package.json` and locked by `e2e/package-lock.json`
   (installed with `npm ci`).
+
+### Dashboards (RBAC Phase 6)
+
+One Dashboard at `/` for every employee, composed by permission — never by
+role name — so an employee with several roles sees the union.
+- **API**: `GET /api/dashboard` (`allow("dashboard.view")`,
+  `src/dashboard.ts`). Sections are included only when
+  `DASHBOARD_SECTION_REQUIREMENTS` (lib/access `dashboard.ts`) hold, and
+  computed at the scope of the section's metrics permission:
+
+  | Section | Requires | Scope from | Contents |
+  |---|---|---|---|
+  | `cases` | metrics.cases + cases.view | metrics.cases | open/completed, open high+critical, open & overdue tasks, by status, open by priority, 30-day created trend, recent (by last activity), attention list, least recently worked, recent activity; `workload` per employee at team/all |
+  | `calls` | metrics.calls + cases.view | metrics.calls (by who logged) | manual call/contact logs: 7/30 days, by channel, latest |
+  | `leads` | metrics.sales + leads.view | metrics.sales | active/total, by current status, recent; `workload` per advisor at team/all |
+  | `accounts` | metrics.sales + accounts.view | metrics.sales (by account owner) | owned accounts, clients linked to them (all scope: all clients), newest, by owner |
+  | `people` | metrics.people + people.view | metrics.people | active/inactive employees, by department, by role, teams with supervisors and members — employees only |
+  | `communication` | messages.use | own | unread mentions, latest mentions (same filter as `/api/mentions`), latest conversations |
+
+  Team scope = the caller + members of the teams they supervise now
+  (stable ids). Workload rows: team → those people; all → every active
+  holder of the view permission plus any owner in scope (+ "No owner").
+  **Tasks have no assignee**, so task counts are attributed to the owner of
+  the task's Case. Overdue = not completed and `dueDate` before now.
+- **Last activity** (`src/caseActivity.ts`): the latest of the Case's
+  `createdAt`/`updatedAt`, its call/contact logs, comments, task creations
+  and document uploads, with its source. Derived on read — never stored,
+  `Case.updatedAt` untouched, existing sorts unchanged. Limitation: task
+  status changes and edits carry no timestamp, so they don't count; and
+  `Case.updatedAt` also moves on reassignment. No "stale" threshold — the
+  actual age is shown.
+- **Web**: `pages/Dashboard.tsx` renders `WIDGETS`
+  (`components/dashboard/widgets.tsx`, presentational parts in `parts.tsx`)
+  whose `DASHBOARD_WIDGETS` requirements hold — decided before fetching.
+  One query (`["dashboard"]`, always refetched on mount). Loading →
+  skeletons; failure → an error banner and per-widget errors with Retry,
+  never zeros; empty lists say so; real zeros show as 0.
+  Test ids: `dashboard`, `widget-<id>` (`data-state` loading/ready/error),
+  `stat-*-value`, `workload-row-<userId>`, `lead-row-<userId>`,
+  `team-<id>`, `dashboard-error`.
+- **Widgets by role** (demo data): CSR / Operations Admin — case summary,
+  attention, least recently worked, breakdown, recent cases, recent
+  activity, trend, calls, mentions, conversations; CSR Supervisor /
+  Operations Admin Supervisor — the same plus workload (team; the Admin
+  Supervisor's `metrics.cases` is all-scope); Business Advisor — lead
+  summary, leads by status, recent leads, accounts, mentions,
+  conversations; BA Supervisor — the same plus leads by advisor; HR —
+  people summary, employees by department/role, teams, mentions,
+  conversations; System Owner — everything, company-wide.
+- **Deferred metrics** (not shown; the data does not exist yet): revenue,
+  commissions, goals/quotas, refunds, chargebacks, disputes, payments —
+  need a billing/accounting backend; lead conversions over time and by
+  advisor — need a conversion event recording who converted and when that
+  survives lead deletion; resolution time / time to close — needs
+  `closedAt` or a status history; task completion rates and task
+  assignment — need task `assigneeUserId`, `updatedAt`, `completedAt`;
+  call volume, talk time, missed calls — need a phone-system integration
+  (today's figures are manual logs only); first response time — needs
+  inbound-message timestamps per case; filing errors — need an error
+  category on cases/documents; employee performance ratings, tenure,
+  headcount history — need HR records (hire/termination dates); leaderboard
+  (`metrics.sales.leaderboard`) — needs reliable conversions.
 
 ### Domain model
 
@@ -482,7 +543,7 @@ alias for `accountId`.
 | Area | State |
 |---|---|
 | Login + session gate | Works (insecure, §2) |
-| Dashboard | Live stats, recent cases, tasks, 30-day trend |
+| Dashboard | Personalized by permission from `GET /api/dashboard` (§2 Dashboards) |
 | Leads | List, filter, create, edit, delete, convert |
 | Records → Accounts | List, search, detail with ~46 inline-editable fields, contacts, cases, New Case |
 | Records → Clients | List/cards, create, detail with linked accounts and cases, New Case |
@@ -495,7 +556,7 @@ alias for `accountId`.
 
 ### Test coverage
 
-`pnpm test`: Vitest + Supertest, **40 files / 536 tests** in
+`pnpm test`: Vitest + Supertest, **43 files / 583 tests** in
 `artifacts/api-server/test/`. Covers stable ownership (v2 migration,
 refusal on unmapped/ambiguous names, rename safety, spoofing, history),
 team scope and reassignment, authorization (every route declared,
@@ -649,8 +710,8 @@ Unrouted and imported by nothing: `pages/Customers.tsx` (still links to
 (Revision 1) in the Project. Phase 1 (identity foundation), Phase 2
 (permission core, `lib/access`), Phase 3 (backend enforcement) and Phase 4
 (stable ownership ids, team scope, reassignment) and Phase 5 (role-aware
-frontend, Playwright RBAC suite) are done. Next per the plan: Phase 6
-dashboards — only after approval. Personalized dashboards follow only after those.
+frontend, Playwright RBAC suite) and Phase 6 (personalized role dashboards)
+are done. The next phase starts only after approval.
 
 1. **CI** — `pnpm install --frozen-lockfile && pnpm typecheck && pnpm test`
    on push.

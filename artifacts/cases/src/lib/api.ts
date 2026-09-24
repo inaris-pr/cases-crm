@@ -449,3 +449,148 @@ export interface Mention {
   caseNumber: string | null;
   caseTitle: string | null;
 }
+
+// ── Dashboard (RBAC Phase 6) — mirrors artifacts/api-server/src/dashboard.ts ──
+// Every section is optional: the server includes one only when the signed-in
+// employee's permissions allow it, computed over records in their scope.
+
+export type DashboardScope = "own" | "team" | "all";
+export type ActivitySource = "created" | "updated" | "call_log" | "comment" | "task" | "document";
+
+export interface DashboardCaseItem {
+  id: number;
+  caseNumber: string;
+  title: string;
+  status: CaseStatus;
+  priority: CasePriority;
+  ownerUserId: number | null;
+  ownerName: string;
+  openTasks: number;
+  overdueTasks: number;
+  lastActivityAt: string;
+  lastActivitySource: ActivitySource;
+  reasons?: ("critical_priority" | "high_priority" | "overdue_tasks")[];
+}
+
+export interface DashboardCases {
+  scope: DashboardScope;
+  summary: { open: number; completed: number; urgentOpen: number; openTasks: number; overdueTasks: number };
+  byStatus: { status: CaseStatus; count: number }[];
+  byPriority: { priority: CasePriority; count: number }[];
+  trend30: { date: string; cases: number; tasks: number }[];
+  recent: DashboardCaseItem[];
+  attention: DashboardCaseItem[];
+  leastRecentlyWorked: DashboardCaseItem[];
+  recentActivity: {
+    kind: "call_log" | "comment" | "task" | "document";
+    caseId: number;
+    caseNumber: string;
+    at: string;
+    byName: string | null;
+    text: string;
+  }[];
+  workload?: {
+    userId: number | null;
+    name: string;
+    active: boolean;
+    openCases: number;
+    urgentCases: number;
+    openTasks: number;
+    overdueTasks: number;
+  }[];
+}
+
+export interface DashboardCalls {
+  scope: DashboardScope;
+  last7Days: number;
+  last30Days: number;
+  byChannel30: { channel: ContactChannel; count: number }[];
+  recent: {
+    id: number;
+    caseId: number;
+    caseNumber: string;
+    channel: ContactChannel;
+    direction: ContactDirection;
+    contact: string;
+    byName: string;
+    createdAt: string;
+  }[];
+}
+
+export interface DashboardLeads {
+  scope: DashboardScope;
+  summary: { active: number; total: number };
+  byStatus: { status: LeadStatus; count: number }[];
+  recent: {
+    id: number;
+    name: string;
+    companyName: string | null;
+    status: LeadStatus;
+    ownerUserId: number | null;
+    ownerName: string;
+    updatedAt: string;
+  }[];
+  workload?: {
+    userId: number | null;
+    name: string;
+    active: boolean;
+    activeLeads: number;
+    totalLeads: number;
+    byStatus: Record<LeadStatus, number>;
+  }[];
+}
+
+export interface DashboardAccounts {
+  scope: DashboardScope;
+  owned: number;
+  linkedClients: number;
+  totalClients?: number;
+  recent: { id: number; name: string; ownerName: string; createdAt: string }[];
+  byOwner?: { userId: number | null; name: string; count: number }[];
+}
+
+export interface DashboardPeople {
+  scope: DashboardScope;
+  activeEmployees: number;
+  inactiveEmployees: number;
+  byDepartment: { key: string | null; label: string; count: number }[];
+  byRole: { key: string; label: string; count: number }[];
+  teams: {
+    id: number;
+    name: string;
+    departmentLabel: string;
+    supervisors: { id: number; name: string }[];
+    members: { id: number; name: string; roles: string[]; active: boolean }[];
+  }[];
+}
+
+export interface DashboardCommunication {
+  unreadMentions: number;
+  mentions: {
+    id: number;
+    fromName: string;
+    body: string;
+    caseId: number;
+    caseNumber: string | null;
+    readAt: string | null;
+    createdAt: string;
+  }[];
+  conversations: {
+    id: number;
+    name: string | null;
+    type: string;
+    members: string[];
+    lastMessage: string | null;
+    lastMessageAt: string | null;
+  }[];
+}
+
+export interface DashboardData {
+  generatedAt: string;
+  cases?: DashboardCases;
+  calls?: DashboardCalls;
+  leads?: DashboardLeads;
+  accounts?: DashboardAccounts;
+  people?: DashboardPeople;
+  communication?: DashboardCommunication;
+}

@@ -83,6 +83,7 @@ const ACCESS: [string, string, Access][] = [
   ["POST", "/automations/:autoId/promote", ["automations.manage_global"]],
   ["POST", "/automations/:autoId/fork", ["automations.edit"]],
   ["POST", "/automations/:autoId/revert", ["automations.edit"]],
+  ["GET", "/dashboard", ["dashboard.view"]],
   ["GET", "/stats", ["metrics.cases"]],
   ["GET", "/customers", ["accounts.view"]],
   ["GET", "/customers/:id", ["accounts.view"]],
@@ -228,6 +229,7 @@ add("DELETE", "/automations/:autoId", () => `/automations/${fx.caseAuto2}`);
 add("POST", "/automations/:autoId/promote", () => `/automations/${fx.caseAuto}/promote`);
 add("POST", "/automations/:autoId/fork", () => `/automations/${fx.global}/fork`, () => ({ caseId: 3 }));
 add("POST", "/automations/:autoId/revert", () => `/automations/${fx.fork}/revert`);
+add("GET", "/dashboard", () => "/dashboard");
 add("GET", "/stats", () => "/stats");
 add("GET", "/customers", () => "/customers");
 add("GET", "/customers/:id", () => "/customers/1");
