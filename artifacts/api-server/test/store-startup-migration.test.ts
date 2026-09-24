@@ -35,8 +35,10 @@ describe("API startup on a pre-Phase-1 store", () => {
     const { store } = await import("../src/store");
     const { createTestApp } = await import("./helpers/app"); // seeds → migrates
 
-    expect(store.accounts).toEqual(LEGACY.accounts); // not reseeded
-    expect(store.meta.schemaVersion).toBe(1);
+    // Not reseeded: the same account, now also carrying its owner's stable
+    // user id (v2 ownership step).
+    expect(store.accounts).toEqual([{ ...LEGACY.accounts[0], ownerUserId: 1 }]);
+    expect(store.meta.schemaVersion).toBe(2);
     expect(store.users.map((u) => u.email)).toEqual([
       "iris@example.com", "devon@example.com",
       "nadia@example.com", "leo@example.com", "grace@example.com", "omar@example.com", "rachel@example.com", "tessa@example.com",
@@ -51,7 +53,7 @@ describe("API startup on a pre-Phase-1 store", () => {
 
     const onDisk = fs.readFileSync(storeFile, "utf-8");
     expect(onDisk).not.toContain("test123");
-    expect(JSON.parse(onDisk).meta).toEqual({ schemaVersion: 1 });
+    expect(JSON.parse(onDisk).meta).toEqual({ schemaVersion: 2 });
 
     // …and a migrated employee signs in with the same password as before.
     const request = (await import("supertest")).default;

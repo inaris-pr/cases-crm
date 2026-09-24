@@ -19,6 +19,7 @@ import {
   publicRoute,
   rowsInScope,
   signedIn,
+  supervisedMemberIds,
   type Principal,
 } from "./auth/authorize.js";
 import { dummyPasswordHash, verifyPassword } from "./auth/password.js";
@@ -52,7 +53,8 @@ import {
   parseMentions,
   persist,
   userByEmail,
-  TEAM_MEMBERS,
+  activeEmployees,
+  userById,
   contactFullName,
   contactsForAccount,
   accountsForContact,
@@ -70,6 +72,7 @@ import {
   type AccountContactLink,
   type Automation,
   type AutomationGraph,
+  type User,
 } from "./store.js";
 
 // Seed once at startup.
@@ -223,16 +226,16 @@ function currentUser(req: Request): string {
 // outside the caller's view scope is treated exactly like a missing one.
 
 function canViewCase(p: Principal, c: Case): boolean {
-  return canOn(p, "cases.view", c.ownerName);
+  return canOn(p, "cases.view", c.ownerUserId);
 }
 function canViewAccount(p: Principal, a: Account): boolean {
-  return canOn(p, "accounts.view", a.ownerName);
+  return canOn(p, "accounts.view", a.ownerUserId);
 }
 function canViewContact(p: Principal, c: Contact): boolean {
-  return canOn(p, "contacts.view", c.ownerName);
+  return canOn(p, "contacts.view", c.ownerUserId);
 }
 function canViewLead(p: Principal, l: Lead): boolean {
-  return canOn(p, "leads.view", l.ownerName);
+  return canOn(p, "leads.view", l.ownerUserId);
 }
 
 /** An Account as this viewer may read it: R2.2 redaction plus `redactedFields`. */
@@ -249,31 +252,50 @@ function findCaseFor(req: Request, id: number): Case | undefined {
 
 /** Cases the caller may view. */
 function viewableCases(p: Principal): Case[] {
-  return rowsInScope(p, "cases.view", store.cases, (c) => c.ownerName);
+  return rowsInScope(p, "cases.view", store.cases, (c) => c.ownerUserId);
 }
 
 /**
- * Which of `fields` the caller may not write on a record owned by
- * `ownerName`, given each field's required permissions. Scoped permissions
- * must cover the record's owner; `newOwnerName` (reassignment) must be in
- * scope too.
+ * Which of `fields` the caller may not write on a record owned by employee
+ * `ownerUserId`, given each field's required permissions (scoped ones must
+ * cover the owner). Ownership itself never changes through these writes —
+ * see the reassignment routes.
  */
 function writeViolations(
   p: Principal,
-  ownerName: string | null,
+  ownerUserId: number | null,
   fields: readonly string[],
   permissionsFor: (field: string) => Permission[] | null,
-  newOwnerName?: string,
 ): string[] {
   return fields.filter((field) => {
     const needed = permissionsFor(field);
     if (needed === null) return true;
-    return !needed.every(
-      (perm) =>
-        canOn(p, perm, ownerName) &&
-        (field !== "ownerName" || newOwnerName === undefined || canOn(p, perm, newOwnerName)),
-    );
+    return !needed.every((perm) => canOn(p, perm, ownerUserId));
   });
+}
+
+/**
+ * A record's owner may change only through the reassignment routes, by
+ * employee id. A display name in a PATCH body is never used to pick an owner.
+ */
+function ownerNameInBody(res: Response, body: { ownerName?: unknown }, route: string): boolean {
+  if (body.ownerName === undefined) return false;
+  res.status(400).json({
+    error: "owner_change_requires_reassign",
+    message: `Change the owner with PUT ${route} and { ownerUserId }.`,
+  });
+  return true;
+}
+
+/** Does the record's owner — by id, under their CURRENT name — match this name filter? */
+function ownerNamed(ownerUserId: number | null, storedName: string, name: string): boolean {
+  const owner = userById(ownerUserId);
+  return (owner ? owner.name : storedName) === name;
+}
+
+/** The session's employee as a Principal-like view for someone else (mention recipients). */
+function principalFor(u: User): Principal {
+  return { user: u, permissions: resolvePermissions(u.roles), supervisedUserIds: supervisedMemberIds(u.id) };
 }
 
 /** Keys actually present in a parsed body (undefined = not supplied). */
@@ -398,6 +420,7 @@ export function buildApiRouter(): Router {
           priority: casePriority.optional(),
           search: z.string().optional(),
           assignee: z.string().optional(),
+          assigneeUserId: z.coerce.number().int().positive().optional(),
           accountId: z.coerce.number().int().optional(),
           contactId: z.coerce.number().int().optional(),
         })
@@ -405,7 +428,8 @@ export function buildApiRouter(): Router {
 
       const p = principalOf(req);
       let rows = viewableCases(p);
-      if (q.assignee) rows = rows.filter((c) => c.ownerName === q.assignee);
+      if (q.assigneeUserId) rows = rows.filter((c) => c.ownerUserId === q.assigneeUserId);
+      if (q.assignee) rows = rows.filter((c) => ownerNamed(c.ownerUserId, c.ownerName, q.assignee!));
       if (q.status) rows = rows.filter((c) => c.status === q.status);
       if (q.priority) rows = rows.filter((c) => c.priority === q.priority);
       if (q.accountId) rows = rows.filter((c) => c.accountId === q.accountId);
@@ -464,6 +488,7 @@ export function buildApiRouter(): Router {
       const accountId = body.accountId ?? body.customerId;
       if (!accountId) return res.status(400).json({ error: "missing_account" });
       const me = currentUser(req);
+      const meId = requireAuth(req).user.id;
       const p = principalOf(req);
       const account = store.accounts.find((a) => a.id === accountId);
       // An account the caller may not view is reported as unknown.
@@ -498,6 +523,7 @@ export function buildApiRouter(): Router {
         description: body.description,
         tags: body.tags,
         ownerName: me,
+        ownerUserId: meId,
         createdAt: now,
         updatedAt: now,
       };
@@ -543,7 +569,7 @@ export function buildApiRouter(): Router {
       const p = principalOf(req);
       // Visible but outside the caller's edit scope (e.g. a CSR on a
       // colleague's case: they may log calls on it, not change it).
-      if (!canOn(p, "cases.edit", c.ownerName)) return outOfScope(res, "cases.edit");
+      if (!canOn(p, "cases.edit", c.ownerUserId)) return outOfScope(res, "cases.edit");
 
       // The same Account/Contact rules as POST /cases, applied to the
       // relationship the case would have AFTER this update. Nothing is
@@ -617,8 +643,8 @@ export function buildApiRouter(): Router {
       const p = principalOf(req);
       // Search matches only name, state and industry — fields every viewer
       // may read in full (R2.2).
-      let rows = rowsInScope(p, "accounts.view", store.accounts, (a) => a.ownerName);
-      if (q.owner) rows = rows.filter((a) => a.ownerName === q.owner);
+      let rows = rowsInScope(p, "accounts.view", store.accounts, (a) => a.ownerUserId);
+      if (q.owner) rows = rows.filter((a) => ownerNamed(a.ownerUserId, a.ownerName, q.owner!));
       if (q.search) {
         const needle = q.search.toLowerCase();
         rows = rows.filter(
@@ -648,10 +674,11 @@ export function buildApiRouter(): Router {
         })
         .parse(req.body);
       const me = currentUser(req);
+      const meId = requireAuth(req).user.id;
       const p = principalOf(req);
       // Every supplied field needs its group's edit permission (R2.3); the
       // new account is the caller's own, so any scope covers it.
-      const denied = writeViolations(p, me, suppliedKeys(body), accountFieldWritePermissions);
+      const denied = writeViolations(p, meId, suppliedKeys(body), accountFieldWritePermissions);
       if (denied.length) return forbiddenFields(res, denied);
       const now = new Date().toISOString();
       const created: Account = {
@@ -672,6 +699,7 @@ export function buildApiRouter(): Router {
         oldStripeIds: null,
         formationStatus: null,
         ownerName: me,
+        ownerUserId: meId,
         archived: false,
         parentAccountId: body.parentAccountId ?? null,
         companyPhone: null,
@@ -750,7 +778,6 @@ export function buildApiRouter(): Router {
       "accounts.edit.regulatory_ids",
       "accounts.edit.financial",
       "accounts.edit.system",
-      "accounts.assign",
       "accounts.archive",
     ),
     asyncHandler(async (req, res) => {
@@ -810,19 +837,15 @@ export function buildApiRouter(): Router {
       const a = store.accounts.find((x) => x.id === id);
       if (!a || !canViewAccount(p, a)) return res.status(404).json({ error: "not_found" });
       // R2.3: every touched field needs its group's edit permission, in scope
-      // for this account (and for the new owner on reassignment). Any
-      // violation rejects the whole request — nothing is partially saved.
-      const denied = writeViolations(
-        p,
-        a.ownerName,
-        suppliedKeys(body),
-        accountFieldWritePermissions,
-        body.ownerName,
-      );
+      // for this account. Any violation rejects the whole request — nothing
+      // is partially saved.
+      if (ownerNameInBody(res, body, `/api/accounts/${id}/owner`)) return;
+      const denied = writeViolations(p, a.ownerUserId, suppliedKeys(body), accountFieldWritePermissions);
       if (denied.length) return forbiddenFields(res, denied);
       Object.assign(a, body);
       // Always bump last-modified on a PATCH.
       const me = currentUser(req);
+      const meId = requireAuth(req).user.id;
       a.lastModifiedAt = new Date().toISOString();
       a.lastModifiedByName = me;
       res.json(accountWithCounts(a, p));
@@ -863,8 +886,8 @@ export function buildApiRouter(): Router {
         })
         .parse(req.query);
       const p = principalOf(req);
-      let rows = rowsInScope(p, "contacts.view", store.contacts, (c) => c.ownerName);
-      if (q.owner) rows = rows.filter((c) => c.ownerName === q.owner);
+      let rows = rowsInScope(p, "contacts.view", store.contacts, (c) => c.ownerUserId);
+      if (q.owner) rows = rows.filter((c) => ownerNamed(c.ownerUserId, c.ownerName, q.owner!));
       if (q.accountId) {
         const ids = new Set(
           store.accountContactLinks
@@ -903,6 +926,7 @@ export function buildApiRouter(): Router {
         })
         .parse(req.body);
       const me = currentUser(req);
+      const meId = requireAuth(req).user.id;
       const created: Contact = {
         id: nextContactId(),
         firstName: body.firstName,
@@ -911,6 +935,7 @@ export function buildApiRouter(): Router {
         phone: body.phone ?? null,
         title: body.title ?? null,
         ownerName: me,
+        ownerUserId: meId,
         createdAt: new Date().toISOString(),
       };
       store.contacts.push(created);
@@ -948,7 +973,7 @@ export function buildApiRouter(): Router {
 
   r.patch(
     "/contacts/:id",
-    allow("contacts.edit", "contacts.assign"),
+    allow("contacts.edit"),
     asyncHandler(async (req, res) => {
       const { id } = idParam.parse(req.params);
       const body = z
@@ -964,15 +989,9 @@ export function buildApiRouter(): Router {
       const p = principalOf(req);
       const c = store.contacts.find((x) => x.id === id);
       if (!c || !canViewContact(p, c)) return res.status(404).json({ error: "not_found" });
-      // ownerName needs contacts.assign (both owners in scope); every other
-      // field needs contacts.edit in scope. All or nothing.
-      const denied = writeViolations(
-        p,
-        c.ownerName,
-        suppliedKeys(body),
-        (f) => (f === "ownerName" ? ["contacts.assign"] : ["contacts.edit"]),
-        body.ownerName,
-      );
+      if (ownerNameInBody(res, body, `/api/contacts/${id}/owner`)) return;
+      // Every field needs contacts.edit in scope. All or nothing.
+      const denied = writeViolations(p, c.ownerUserId, suppliedKeys(body), () => ["contacts.edit"]);
       if (denied.length) return forbiddenFields(res, denied);
       Object.assign(c, body);
       res.json(contactWithSummary(c, p));
@@ -1082,8 +1101,8 @@ export function buildApiRouter(): Router {
           search: z.string().optional(),
         })
         .parse(req.query);
-      let rows = rowsInScope(principalOf(req), "leads.view", store.leads, (l) => l.ownerName);
-      if (q.owner) rows = rows.filter((l) => l.ownerName === q.owner);
+      let rows = rowsInScope(principalOf(req), "leads.view", store.leads, (l) => l.ownerUserId);
+      if (q.owner) rows = rows.filter((l) => ownerNamed(l.ownerUserId, l.ownerName, q.owner!));
       if (q.status) rows = rows.filter((l) => l.status === q.status);
       if (q.search) {
         const needle = q.search.toLowerCase();
@@ -1119,6 +1138,7 @@ export function buildApiRouter(): Router {
         })
         .parse(req.body);
       const me = currentUser(req);
+      const meId = requireAuth(req).user.id;
       const now = new Date().toISOString();
       const created: Lead = {
         id: nextLeadId(),
@@ -1133,6 +1153,7 @@ export function buildApiRouter(): Router {
         status: body.status,
         notes: body.notes ?? null,
         ownerName: me,
+        ownerUserId: meId,
         estimatedValue: body.estimatedValue ?? null,
         convertedAt: null,
         convertedAccountId: null,
@@ -1147,7 +1168,7 @@ export function buildApiRouter(): Router {
 
   r.patch(
     "/leads/:id",
-    allow("leads.edit", "leads.assign"),
+    allow("leads.edit"),
     asyncHandler(async (req, res) => {
       const { id } = idParam.parse(req.params);
       const body = z
@@ -1169,15 +1190,9 @@ export function buildApiRouter(): Router {
       const p = principalOf(req);
       const l = store.leads.find((x) => x.id === id);
       if (!l || !canViewLead(p, l)) return res.status(404).json({ error: "not_found" });
-      // ownerName needs leads.assign (both owners in scope); every other
-      // field needs leads.edit in scope. All or nothing.
-      const denied = writeViolations(
-        p,
-        l.ownerName,
-        suppliedKeys(body),
-        (f) => (f === "ownerName" ? ["leads.assign"] : ["leads.edit"]),
-        body.ownerName,
-      );
+      if (ownerNameInBody(res, body, `/api/leads/${id}/owner`)) return;
+      // Every field needs leads.edit in scope. All or nothing.
+      const denied = writeViolations(p, l.ownerUserId, suppliedKeys(body), () => ["leads.edit"]);
       if (denied.length) return forbiddenFields(res, denied);
       Object.assign(l, body, { updatedAt: new Date().toISOString() });
       res.json(l);
@@ -1210,7 +1225,7 @@ export function buildApiRouter(): Router {
       const p = principalOf(req);
       const lead = store.leads.find((l) => l.id === id);
       if (!lead || !canViewLead(p, lead)) return res.status(404).json({ error: "not_found" });
-      if (!canOn(p, "leads.convert", lead.ownerName)) return outOfScope(res, "leads.convert");
+      if (!canOn(p, "leads.convert", lead.ownerUserId)) return outOfScope(res, "leads.convert");
       if (lead.convertedAt)
         return res.status(409).json({ error: "already_converted" });
       // B4: the optional first Case needs cases.create. Refused as a whole —
@@ -1220,6 +1235,7 @@ export function buildApiRouter(): Router {
 
       const now = new Date().toISOString();
       const me = currentUser(req);
+      const meId = requireAuth(req).user.id;
 
       // 1. Create Account
       const account: Account = makeAccount({
@@ -1231,6 +1247,7 @@ export function buildApiRouter(): Router {
         website: null,
         parentAccountId: null,
         ownerName: me,
+        ownerUserId: meId,
         createdAt: now,
         createdByName: me,
         lastModifiedAt: now,
@@ -1247,6 +1264,7 @@ export function buildApiRouter(): Router {
         phone: lead.phone,
         title: body.contactTitle ?? null,
         ownerName: me,
+        ownerUserId: meId,
         createdAt: now,
       };
       store.contacts.push(contact);
@@ -1279,6 +1297,7 @@ export function buildApiRouter(): Router {
           description: lead.notes ?? "",
           tags: [],
           ownerName: me,
+        ownerUserId: meId,
           createdAt: now,
           updatedAt: now,
         };
@@ -1310,9 +1329,124 @@ export function buildApiRouter(): Router {
       const p = principalOf(req);
       const idx = store.leads.findIndex((l) => l.id === id);
       if (idx === -1 || !canViewLead(p, store.leads[idx])) return res.status(404).json({ error: "not_found" });
-      if (!canOn(p, "leads.delete", store.leads[idx].ownerName)) return outOfScope(res, "leads.delete");
+      if (!canOn(p, "leads.delete", store.leads[idx].ownerUserId)) return outOfScope(res, "leads.delete");
       store.leads.splice(idx, 1);
       res.status(204).end();
+    }),
+  );
+
+  // ── Reassignment (RBAC Phase 4) ─────────────────────────────────────────────
+  // PUT /api/{cases|leads|accounts|contacts}/:id/owner  { ownerUserId }
+  //
+  // The only way a record changes owner. By employee id — a display name from
+  // the client is never used. Rules (D7):
+  //   - the caller holds <type>.assign; the record must be visible (else 404)
+  //   - the CURRENT owner must be inside the caller's assign scope
+  //   - the TARGET must exist, be active, be able to view that record type,
+  //     and be inside the caller's assign scope too (team scope never crosses
+  //     teams; only "all" does)
+  const ownerBody = z.object({ ownerUserId: z.number().int().positive() }).strict();
+
+  type Owned = { ownerUserId: number | null; ownerName: string };
+
+  /** Validates a reassignment; sends the error and returns null, or the target. */
+  function reassignTarget(
+    req: Request,
+    res: Response,
+    record: Owned,
+    assign: Permission,
+    targetMustHold: Permission,
+  ): User | null {
+    const p = principalOf(req);
+    const body = ownerBody.parse(req.body);
+    if (!canOn(p, assign, record.ownerUserId)) {
+      outOfScope(res, assign);
+      return null;
+    }
+    const target = userById(body.ownerUserId);
+    if (!target) {
+      res.status(400).json({ error: "unknown_user" });
+      return null;
+    }
+    if (!target.active) {
+      res.status(400).json({ error: "inactive_user" });
+      return null;
+    }
+    if (!can(resolvePermissions(target.roles), targetMustHold)) {
+      res.status(400).json({ error: "target_cannot_own", permission: targetMustHold });
+      return null;
+    }
+    if (!canOn(p, assign, target.id)) {
+      res.status(403).json({ error: "target_out_of_scope", permission: assign });
+      return null;
+    }
+    return target;
+  }
+
+  function setOwner(record: Owned, target: User) {
+    record.ownerUserId = target.id;
+    record.ownerName = target.name; // display label follows the new owner
+  }
+
+  r.put(
+    "/cases/:id/owner",
+    allow("cases.assign"),
+    asyncHandler(async (req, res) => {
+      const { id } = idParam.parse(req.params);
+      const c = findCaseFor(req, id);
+      if (!c) return res.status(404).json({ error: "not_found" });
+      const target = reassignTarget(req, res, c, "cases.assign", "cases.view");
+      if (!target) return;
+      setOwner(c, target);
+      c.updatedAt = new Date().toISOString();
+      res.json(caseWithRelations(c, principalOf(req)));
+    }),
+  );
+
+  r.put(
+    "/leads/:id/owner",
+    allow("leads.assign"),
+    asyncHandler(async (req, res) => {
+      const { id } = idParam.parse(req.params);
+      const l = store.leads.find((x) => x.id === id);
+      if (!l || !canViewLead(principalOf(req), l)) return res.status(404).json({ error: "not_found" });
+      const target = reassignTarget(req, res, l, "leads.assign", "leads.view");
+      if (!target) return;
+      setOwner(l, target);
+      l.updatedAt = new Date().toISOString();
+      res.json(l);
+    }),
+  );
+
+  r.put(
+    "/accounts/:id/owner",
+    allow("accounts.assign"),
+    asyncHandler(async (req, res) => {
+      const { id } = idParam.parse(req.params);
+      const p = principalOf(req);
+      const a = store.accounts.find((x) => x.id === id);
+      if (!a || !canViewAccount(p, a)) return res.status(404).json({ error: "not_found" });
+      const target = reassignTarget(req, res, a, "accounts.assign", "accounts.view");
+      if (!target) return;
+      setOwner(a, target);
+      a.lastModifiedAt = new Date().toISOString();
+      a.lastModifiedByName = currentUser(req);
+      res.json(accountWithCounts(a, p));
+    }),
+  );
+
+  r.put(
+    "/contacts/:id/owner",
+    allow("contacts.assign"),
+    asyncHandler(async (req, res) => {
+      const { id } = idParam.parse(req.params);
+      const p = principalOf(req);
+      const c = store.contacts.find((x) => x.id === id);
+      if (!c || !canViewContact(p, c)) return res.status(404).json({ error: "not_found" });
+      const target = reassignTarget(req, res, c, "contacts.assign", "contacts.view");
+      if (!target) return;
+      setOwner(c, target);
+      res.json(contactWithSummary(c, p));
     }),
   );
 
@@ -1349,7 +1483,7 @@ export function buildApiRouter(): Router {
         .parse(req.body);
       const taskCase = findCaseFor(req, body.caseId);
       if (!taskCase) return res.status(404).json({ error: "case_not_found" });
-      if (!canOn(principalOf(req), "cases.work", taskCase.ownerName)) return outOfScope(res, "cases.work");
+      if (!canOn(principalOf(req), "cases.work", taskCase.ownerUserId)) return outOfScope(res, "cases.work");
       const created = {
         id: nextTaskId(),
         caseId: body.caseId,
@@ -1380,7 +1514,7 @@ export function buildApiRouter(): Router {
       const t = store.tasks.find((x) => x.id === id);
       const taskCase = t ? findCaseFor(req, t.caseId) : undefined;
       if (!t || !taskCase) return res.status(404).json({ error: "not_found" });
-      if (!canOn(principalOf(req), "cases.work", taskCase.ownerName)) return outOfScope(res, "cases.work");
+      if (!canOn(principalOf(req), "cases.work", taskCase.ownerUserId)) return outOfScope(res, "cases.work");
       Object.assign(t, body);
       res.json(t);
     }),
@@ -1416,7 +1550,7 @@ export function buildApiRouter(): Router {
         .parse(req.body);
       const docCase = findCaseFor(req, body.caseId);
       if (!docCase) return res.status(404).json({ error: "case_not_found" });
-      if (!canOn(principalOf(req), "cases.work", docCase.ownerName)) return outOfScope(res, "cases.work");
+      if (!canOn(principalOf(req), "cases.work", docCase.ownerUserId)) return outOfScope(res, "cases.work");
       const created = {
         id: nextDocumentId(),
         caseId: body.caseId,
@@ -1466,7 +1600,7 @@ export function buildApiRouter(): Router {
         .parse(req.body);
       const c = findCaseFor(req, id);
       if (!c) return res.status(404).json({ error: "not_found" });
-      if (!canOn(principalOf(req), "cases.work", c.ownerName)) return outOfScope(res, "cases.work");
+      if (!canOn(principalOf(req), "cases.work", c.ownerUserId)) return outOfScope(res, "cases.work");
       const created = {
         id: nextCaseInteractionId(),
         caseId: id,
@@ -1475,6 +1609,7 @@ export function buildApiRouter(): Router {
         summary: body.summary,
         contact: body.contact,
         byName: currentUser(req),
+        byUserId: requireAuth(req).user.id,
         createdAt: new Date().toISOString(),
       };
       store.caseInteractions.push(created);
@@ -1510,32 +1645,38 @@ export function buildApiRouter(): Router {
         .parse(req.body);
       const c = findCaseFor(req, id);
       if (!c) return res.status(404).json({ error: "not_found" });
-      if (!canOn(principalOf(req), "cases.work", c.ownerName)) return outOfScope(res, "cases.work");
-      const author = currentUser(req);
+      if (!canOn(principalOf(req), "cases.work", c.ownerUserId)) return outOfScope(res, "cases.work");
+      const authorUser = requireAuth(req).user;
       const created = {
         id: nextThreadEntryId(),
         caseId: id,
-        authorName: author,
+        authorName: authorUser.name,
+        authorUserId: authorUser.id,
         body: body.body,
         createdAt: new Date().toISOString(),
       };
       store.threadEntries.push(created);
 
-      const mentioned = parseMentions(body.body, author);
+      // Only active employees who may view this case are notified.
+      const mentioned = parseMentions(body.body, authorUser.id).filter((u) =>
+        canViewCase(principalFor(u), c),
+      );
       for (const recipient of mentioned) {
         store.mentions.push({
           id: nextMentionId(),
           threadEntryId: created.id,
           caseId: c.id,
-          fromName: author,
-          toName: recipient,
+          fromName: authorUser.name,
+          toName: recipient.name,
+          fromUserId: authorUser.id,
+          toUserId: recipient.id,
           body: body.body,
           readAt: null,
           createdAt: new Date().toISOString(),
         });
       }
 
-      res.status(201).json({ ...created, mentioned });
+      res.status(201).json({ ...created, mentioned: mentioned.map((u) => u.name) });
     }),
   );
 
@@ -1551,13 +1692,12 @@ export function buildApiRouter(): Router {
     asyncHandler(async (req, res) => {
       const q = z.object({ for: z.string().optional() }).parse(req.query);
       const p = principalOf(req);
-      const me = p.user.name;
-      if (q.for !== undefined && q.for !== me) {
+      if (q.for !== undefined && q.for !== p.user.name) {
         return res.status(403).json({ error: "not_your_mentions" });
       }
       const rows = store.mentions
         .map((m) => ({ m, c: store.cases.find((x) => x.id === m.caseId) ?? null }))
-        .filter(({ m, c }) => m.toName === me && (c === null || canViewCase(p, c)));
+        .filter(({ m, c }) => m.toUserId === p.user.id && (c === null || canViewCase(p, c)));
       rows.sort((a, b) => +new Date(b.m.createdAt) - +new Date(a.m.createdAt));
       res.json(
         rows.map(({ m, c }) => ({
@@ -1576,19 +1716,18 @@ export function buildApiRouter(): Router {
       const { id } = idParam.parse(req.params);
       const m = store.mentions.find((x) => x.id === id);
       // Only your own mentions exist, as far as you can tell.
-      if (!m || m.toName !== currentUser(req)) return res.status(404).json({ error: "not_found" });
+      if (!m || m.toUserId !== requireAuth(req).user.id) return res.status(404).json({ error: "not_found" });
       m.readAt = new Date().toISOString();
       res.json(m);
     }),
   );
 
-  // Names for owner pickers and @mention autocomplete (rebuilt from active
-  // employees in Phase 4).
+  // Names for owner pickers and @mention autocomplete: the active employees.
   r.get(
     "/team",
     allow("messages.use"),
     asyncHandler(async (_req, res) => {
-      res.json(TEAM_MEMBERS);
+      res.json(activeEmployees().map((u) => u.name));
     }),
   );
 
@@ -1686,7 +1825,7 @@ export function buildApiRouter(): Router {
       }
       return true;
     }
-    if (!canOn(p, "automations.edit", automationCase(a)?.ownerName)) {
+    if (!canOn(p, "automations.edit", automationCase(a)?.ownerUserId)) {
       outOfScope(res, "automations.edit");
       return false;
     }
@@ -1742,9 +1881,10 @@ export function buildApiRouter(): Router {
       const p = principalOf(req);
       if (body.scope === "global" && !can(p.permissions, "automations.manage_global"))
         return forbidden(res, "automations.manage_global");
-      if (body.scope === "case" && !canOn(p, "automations.edit", target.ownerName))
+      if (body.scope === "case" && !canOn(p, "automations.edit", target.ownerUserId))
         return outOfScope(res, "automations.edit");
       const me = currentUser(req);
+      const meId = requireAuth(req).user.id;
       const now = new Date().toISOString();
       const isGlobal = body.scope === "global";
       const created: Automation = {
@@ -1757,6 +1897,7 @@ export function buildApiRouter(): Router {
         derivedFromAutomationId: null,
         originCaseId: isGlobal ? id : null,
         ownerName: me,
+        ownerUserId: meId,
         createdAt: now,
         createdByName: me,
         updatedAt: now,
@@ -1904,13 +2045,14 @@ export function buildApiRouter(): Router {
       if (!forkCase) {
         return res.status(404).json({ error: "case_not_found" });
       }
-      if (!canOn(principalOf(req), "automations.edit", forkCase.ownerName)) {
+      if (!canOn(principalOf(req), "automations.edit", forkCase.ownerUserId)) {
         return outOfScope(res, "automations.edit");
       }
       if (forkedGlobalIds(body.caseId).has(source.id)) {
         return res.status(409).json({ error: "already_customized" });
       }
       const me = currentUser(req);
+      const meId = requireAuth(req).user.id;
       const now = new Date().toISOString();
       const copy: Automation = {
         id: nextAutomationId(),
@@ -1923,6 +2065,7 @@ export function buildApiRouter(): Router {
         derivedFromAutomationId: source.id,
         originCaseId: null,
         ownerName: me,
+        ownerUserId: meId,
         createdAt: now,
         createdByName: me,
         updatedAt: now,
@@ -1971,18 +2114,31 @@ export function buildApiRouter(): Router {
     "/stats",
     allow("metrics.cases"),
     asyncHandler(async (req, res) => {
-      const q = z.object({ assignee: z.string().optional() }).parse(req.query);
+      const q = z
+        .object({
+          assignee: z.string().optional(),
+          assigneeUserId: z.coerce.number().int().positive().optional(),
+        })
+        .parse(req.query);
       const p = principalOf(req);
-      if (q.assignee !== undefined && !canOn(p, "metrics.cases", q.assignee))
+      // The employee asked about, by id. A name is resolved to exactly one
+      // employee (current names) or refused — never guessed.
+      let assigneeId: number | undefined = q.assigneeUserId;
+      if (assigneeId === undefined && q.assignee !== undefined) {
+        const matches = store.users.filter((u) => u.name === q.assignee);
+        if (matches.length !== 1) return res.status(400).json({ error: "unknown_assignee" });
+        assigneeId = matches[0].id;
+      }
+      if (assigneeId !== undefined && !canOn(p, "metrics.cases", assigneeId))
         return outOfScope(res, "metrics.cases");
-      const inMetricScope = <T extends { ownerName: string }>(rows: readonly T[]) =>
-        rowsInScope(p, "metrics.cases", rows, (x) => x.ownerName);
-      const myCases = q.assignee
-        ? store.cases.filter((c) => c.ownerName === q.assignee)
+      const inMetricScope = <T extends { ownerUserId: number | null }>(rows: readonly T[]) =>
+        rowsInScope(p, "metrics.cases", rows, (x) => x.ownerUserId);
+      const myCases = assigneeId !== undefined
+        ? store.cases.filter((c) => c.ownerUserId === assigneeId)
         : inMetricScope(store.cases);
-      const viewableAccounts = rowsInScope(p, "accounts.view", store.accounts, (a) => a.ownerName);
-      const myAccounts = q.assignee
-        ? viewableAccounts.filter((a) => a.ownerName === q.assignee)
+      const viewableAccounts = rowsInScope(p, "accounts.view", store.accounts, (a) => a.ownerUserId);
+      const myAccounts = assigneeId !== undefined
+        ? viewableAccounts.filter((a) => a.ownerUserId === assigneeId)
         : inMetricScope(viewableAccounts);
       const myCaseIds = new Set(myCases.map((c) => c.id));
       const myTasks = store.tasks.filter((t) => myCaseIds.has(t.caseId));
@@ -2052,7 +2208,7 @@ export function buildApiRouter(): Router {
     allow("accounts.view"),
     asyncHandler(async (req, res) => {
       const p = principalOf(req);
-      const rows = rowsInScope(p, "accounts.view", store.accounts, (a) => a.ownerName)
+      const rows = rowsInScope(p, "accounts.view", store.accounts, (a) => a.ownerUserId)
         .sort((a, b) => a.name.localeCompare(b.name))
         .map((a) => legacyCustomerView(a, p));
       res.json(rows);
@@ -2077,8 +2233,12 @@ export function buildApiRouter(): Router {
   // Messaging is membership-scoped: you read and write only conversations you
   // are a member of, and see case tags only for cases you may view.
   function memberConversation(req: Request, id: number) {
-    const me = currentUser(req);
-    return store.conversations.find((c) => c.id === id && c.members.includes(me));
+    const me = requireAuth(req).user.id;
+    return store.conversations.find((c) => c.id === id && c.memberUserIds.includes(me));
+  }
+  /** Members' current display names, from their ids. */
+  function memberNames(c: { members: string[]; memberUserIds: number[] }): string[] {
+    return c.memberUserIds.map((id, i) => userById(id)?.name ?? c.members[i] ?? `#${id}`);
   }
   function visibleCaseTags(p: Principal, ids: number[]) {
     return caseTagSummaries(
@@ -2093,8 +2253,8 @@ export function buildApiRouter(): Router {
     "/conversations",
     allow("messages.use"),
     asyncHandler(async (req, res) => {
-      const me = currentUser(req);
-      const all = store.conversations.filter((c) => c.members.includes(me));
+      const meId = requireAuth(req).user.id;
+      const all = store.conversations.filter((c) => c.memberUserIds.includes(meId));
       const rows = [...all]
         .sort((a, b) => +new Date(b.createdAt) - +new Date(a.createdAt))
         .map((c) => {
@@ -2107,7 +2267,8 @@ export function buildApiRouter(): Router {
             name: c.name,
             type: c.type,
             createdAt: c.createdAt,
-            members: c.members,
+            members: memberNames(c),
+            memberUserIds: c.memberUserIds,
             lastMessage: last?.content ?? null,
             lastMessageAt: last?.createdAt ?? null,
           };
@@ -2124,18 +2285,35 @@ export function buildApiRouter(): Router {
         .object({
           type: conversationType,
           name: z.string().optional(),
-          members: z.array(z.string()).min(1),
+          // Members by employee id (preferred), or by display name for older
+          // clients — each name must match exactly one active employee.
+          memberUserIds: z.array(z.number().int().positive()).min(1).optional(),
+          members: z.array(z.string()).min(1).optional(),
         })
+        .refine((b) => b.memberUserIds || b.members, { message: "members or memberUserIds required" })
         .parse(req.body);
+      const active = activeEmployees();
+      let people: User[];
+      if (body.memberUserIds) {
+        const missing = body.memberUserIds.filter((id) => !active.some((u) => u.id === id));
+        if (missing.length) return res.status(400).json({ error: "unknown_member", memberUserIds: missing });
+        people = body.memberUserIds.map((id) => active.find((u) => u.id === id)!);
+      } else {
+        const unknown = body.members!.filter((n) => active.filter((u) => u.name === n).length !== 1);
+        if (unknown.length) return res.status(400).json({ error: "unknown_member", members: unknown });
+        people = body.members!.map((n) => active.find((u) => u.name === n)!);
+      }
+      people = people.filter((u, i) => people.findIndex((x) => x.id === u.id) === i);
       // You can only start conversations you are part of.
-      if (!body.members.includes(currentUser(req)))
+      if (!people.some((u) => u.id === requireAuth(req).user.id))
         return res.status(400).json({ error: "creator_not_member" });
       const created = {
         id: nextConversationId(),
         name: body.name ?? null,
         type: body.type,
         createdAt: new Date().toISOString(),
-        members: body.members,
+        members: people.map((u) => u.name),
+        memberUserIds: people.map((u) => u.id),
       };
       store.conversations.push(created);
       res.status(201).json(created);
@@ -2185,6 +2363,7 @@ export function buildApiRouter(): Router {
         id: nextMessageId(),
         conversationId: id,
         senderName: currentUser(req),
+        senderUserId: requireAuth(req).user.id,
         content: body.content,
         createdAt: new Date().toISOString(),
         deletedAt: null,
@@ -2210,7 +2389,7 @@ export function buildApiRouter(): Router {
       const m = store.messages.find((x) => x.id === id);
       if (!m || !memberConversation(req, m.conversationId)) return res.status(404).json({ error: "not_found" });
       // Only the author may delete — judged by the session, not a body field.
-      if (m.senderName !== currentUser(req))
+      if (m.senderUserId !== requireAuth(req).user.id)
         return res.status(403).json({ error: "not_author" });
       m.deletedAt = new Date().toISOString();
       m.content = "";

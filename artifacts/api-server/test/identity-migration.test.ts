@@ -14,7 +14,7 @@ import { isPasswordHash, verifyPassword } from "../src/auth/password";
 import { DEMO_EMPLOYEES, DEMO_TEAMS } from "../src/auth/identity";
 
 /**
- * Phase 1 store migration (schema v0 → v1): users get hashed passwords,
+ * Phase 1 store migration (schema v0 → v1, run with targetVersion 1): users get hashed passwords,
  * roles[], departments and flags; demo employees and demo teams are added;
  * NOTHING else in the store changes. Driven directly on files inside this
  * test's throwaway working directory — never the repository's store.json.
@@ -71,7 +71,9 @@ function writeFixture(data: any): { dir: string; storeFile: string; backupDir: s
 
 function runOnFile(storeFile: string, backupDir: string, extra: Partial<Parameters<typeof migrateStoreFile>[0]> = {}) {
   const sourceBytes = fs.readFileSync(storeFile);
-  return migrateStoreFile({ storeFile, backupDir, sourceBytes, data: JSON.parse(sourceBytes.toString("utf-8")), ...extra });
+  // These tests cover the v1 step; later steps have their own tests
+  // (ownership-migration.test.ts).
+  return migrateStoreFile({ storeFile, backupDir, sourceBytes, data: JSON.parse(sourceBytes.toString("utf-8")), targetVersion: 1, ...extra });
 }
 
 const UNRELATED = [
@@ -216,11 +218,11 @@ describe("migrating a pre-Phase-1 store.json", () => {
 describe("step-level idempotency", () => {
   it("re-running the step on migrated data (version marker lost) adds nothing and re-hashes nothing", () => {
     const data = legacyStore();
-    migrateData(data);
+    migrateData(data, { targetVersion: 1 });
     const snapshot = JSON.parse(JSON.stringify(data));
     delete data.meta; // simulate a lost version marker
 
-    migrateData(data);
+    migrateData(data, { targetVersion: 1 });
 
     expect(data.users).toEqual(snapshot.users);
     expect(data.teams).toEqual(snapshot.teams);
@@ -233,7 +235,7 @@ describe("step-level idempotency", () => {
       id: 50, name: "Real Nadia", email: "NADIA@example.com", password: "own-secret", role: "case_manager",
       createdAt: "2026-01-01T00:00:00.000Z",
     });
-    migrateData(data);
+    migrateData(data, { targetVersion: 1 });
 
     const nadias = data.users.filter((u: any) => u.email.toLowerCase() === "nadia@example.com");
     expect(nadias).toHaveLength(1);
@@ -244,7 +246,7 @@ describe("step-level idempotency", () => {
 
   it("never runs on a store that is already current", () => {
     const data = JSON.parse(JSON.stringify(fresh));
-    const res = migrateData(data);
+    const res = migrateData(data, { targetVersion: 1 });
     expect(res.steps).toEqual([]);
     expect(data).toEqual(fresh);
   });
@@ -255,7 +257,7 @@ describe("the migration refuses to proceed unsafely", () => {
     const fx = writeFixture(legacyStore());
     const now = new Date("2026-09-24T12:00:00.000Z");
     fs.mkdirSync(fx.backupDir, { recursive: true });
-    const existing = path.join(fx.backupDir, backupFileName(0, now));
+    const existing = path.join(fx.backupDir, backupFileName(0, now, 1));
     fs.writeFileSync(existing, "an older backup");
 
     expect(() => runOnFile(fx.storeFile, fx.backupDir, { now })).toThrow(MigrationAbortError);

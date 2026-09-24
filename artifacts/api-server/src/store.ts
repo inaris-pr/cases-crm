@@ -14,6 +14,7 @@ import { DEMO_PASSWORD, type DepartmentKey, type RoleKey } from "./auth/identity
 import {
   CURRENT_SCHEMA_VERSION,
   MigrationAbortError,
+  assignOwnershipIds,
   ensureDemoEmployees,
   ensureDemoTeams,
   migrateStoreFile,
@@ -73,7 +74,8 @@ export interface Account {
   oldStripeIds: string | null;
   formationStatus: string | null;
   // ── Account Information (right column) ───────────────────────────────
-  ownerName: string;                // "Account Owner"
+  ownerName: string;                // "Account Owner" — display label; ownerUserId is authoritative
+  ownerUserId: number | null;       // the owning employee (RBAC Phase 4)
   archived: boolean;
   parentAccountId: number | null;
   companyPhone: string | null;
@@ -121,7 +123,8 @@ export interface Contact {
   email: string | null;
   phone: string | null;
   title: string | null;     // job title, e.g., "Founder", "CFO", "Outside Counsel"
-  ownerName: string;        // teammate who owns this relationship
+  ownerName: string;        // teammate who owns this relationship (display label)
+  ownerUserId: number | null; // the owning employee — authoritative (Phase 4)
   createdAt: string;
 }
 
@@ -161,7 +164,8 @@ export interface Lead {
   source: LeadSource;
   status: LeadStatus;
   notes: string | null;
-  ownerName: string;
+  ownerName: string;                // display label
+  ownerUserId: number | null;       // the owning employee — authoritative (Phase 4)
   estimatedValue: number | null;    // dollar estimate of the deal
   convertedAt: string | null;
   convertedAccountId: number | null;
@@ -180,7 +184,8 @@ export interface Case {
   priority: CasePriority;
   description: string | null;
   tags: string[];
-  ownerName: string;
+  ownerName: string;                 // display label
+  ownerUserId: number | null;        // the owning employee — authoritative (Phase 4)
   createdAt: string;
   updatedAt: string;
 }
@@ -211,13 +216,17 @@ export interface Conversation {
   name: string | null;
   type: ConversationType;
   createdAt: string;
+  /** Member display names as they were when the conversation was created. */
   members: string[];
+  /** Members by employee id — authoritative for membership (Phase 4). */
+  memberUserIds: number[];
 }
 
 export interface Message {
   id: number;
   conversationId: number;
-  senderName: string;
+  senderName: string;         // as shown when sent; never rewritten
+  senderUserId: number | null; // the sender — authoritative (Phase 4)
   content: string;
   createdAt: string;
   deletedAt: string | null;
@@ -226,9 +235,8 @@ export interface Message {
 
 /**
  * An employee login. `passwordHash` is scrypt (see auth/password.ts) and never
- * leaves the server — responses go through publicUser(). Roles are stored in
- * Phase 1 but do not yet grant or deny anything (permissions arrive in
- * Phase 2/3).
+ * leaves the server — responses go through publicUser(). Roles resolve to
+ * permissions through lib/access (enforced by auth/authorize.ts).
  */
 export interface User {
   id: number;
@@ -291,14 +299,16 @@ export interface CaseInteraction {
   channel: ContactChannel;
   summary: string;
   contact: string;
-  byName: string;
+  byName: string;             // as logged; never rewritten
+  byUserId: number | null;    // the employee who logged it — authoritative (Phase 4)
   createdAt: string;
 }
 
 export interface CaseThreadEntry {
   id: number;
   caseId: number;
-  authorName: string;
+  authorName: string;           // as written; never rewritten
+  authorUserId: number | null;  // the author — authoritative (Phase 4)
   body: string;
   createdAt: string;
 }
@@ -309,6 +319,8 @@ export interface Mention {
   caseId: number;
   fromName: string;
   toName: string;
+  fromUserId: number | null;
+  toUserId: number | null;      // the recipient — authoritative (Phase 4)
   body: string;
   readAt: string | null;
   createdAt: string;
@@ -372,6 +384,7 @@ export interface Automation {
   /** Where a promoted global originally came from, for provenance only. */
   originCaseId: number | null;
   ownerName: string;
+  ownerUserId: number | null;
   createdAt: string;
   createdByName: string | null;
   updatedAt: string;
@@ -545,6 +558,7 @@ export function makeAccount(
     bankingAppMessage: null,
     industry: null,
     website: null,
+    ownerUserId: null, // filled from ownerName by assignOwnershipIds (seed) or set by the caller
     createdByName: null,
     lastModifiedAt: null,
     lastModifiedByName: null,
@@ -689,6 +703,13 @@ function logMigration(report: import("./migrations.js").MigrationReport) {
       `[store]   sha256: ${report.sourceSha256} (backup verified)`,
   );
   for (const step of report.steps) {
+    if (step.ownership) {
+      const counts = step.ownership.fields
+        .map((f) => `${f.collection}.${f.idField}=${f.mapped}${f.alreadySet ? ` (+${f.alreadySet} already set)` : ""}`)
+        .join(", ");
+      console.warn(`[store]   step v${step.version} ${step.name}: ${counts}`);
+      continue;
+    }
     console.warn(
       `[store]   step v${step.version} ${step.name}: ${step.users.length} user(s) migrated, ` +
         `${step.demoEmployeesAdded.length} demo employee(s) added, ${step.demoTeamsAdded.length} demo team(s) added`,
@@ -753,31 +774,31 @@ export function seed() {
   // Marcus's holdco has TWO contacts (himself + outside counsel).
   const contacts: Contact[] = [
     // Iris's people
-    { id: nextContactId(), firstName: "Amelia",   lastName: "Reyes",   email: "amelia@helixlabs.io",         phone: "+1 415 555 0144", title: "Founder",           ownerName: "Iris Burgos",    createdAt: daysAgo(42) },
-    { id: nextContactId(), firstName: "Yuki",     lastName: "Tanaka",  email: "yuki@brightlinestudios.com",  phone: "+1 415 555 0182", title: "Creative Director", ownerName: "Iris Burgos",    createdAt: daysAgo(50) },
-    { id: nextContactId(), firstName: "Hassan",   lastName: "Patel",   email: "hassan@patelholdings.com",    phone: "+1 307 555 0110", title: "Principal",         ownerName: "Iris Burgos",    createdAt: daysAgo(36) },
-    { id: nextContactId(), firstName: "Sofia",    lastName: "Mendoza", email: "sofia@mendozaarch.com",       phone: "+1 415 555 0133", title: "Principal Architect", ownerName: "Iris Burgos",  createdAt: daysAgo(23) },
-    { id: nextContactId(), firstName: "Daniel",   lastName: "Park",    email: "daniel@mendozaarch.com",      phone: "+1 415 555 0134", title: "Senior Architect",  ownerName: "Iris Burgos",    createdAt: daysAgo(23) },
-    { id: nextContactId(), firstName: "Robert",   lastName: "Chen",    email: "robert@chencapital.com",      phone: "+1 212 555 0107", title: "Managing Partner",  ownerName: "Iris Burgos",    createdAt: daysAgo(19) },
+    { id: nextContactId(), firstName: "Amelia",   lastName: "Reyes",   email: "amelia@helixlabs.io",         phone: "+1 415 555 0144", title: "Founder",           ownerName: "Iris Burgos", ownerUserId: null,    createdAt: daysAgo(42) },
+    { id: nextContactId(), firstName: "Yuki",     lastName: "Tanaka",  email: "yuki@brightlinestudios.com",  phone: "+1 415 555 0182", title: "Creative Director", ownerName: "Iris Burgos", ownerUserId: null,    createdAt: daysAgo(50) },
+    { id: nextContactId(), firstName: "Hassan",   lastName: "Patel",   email: "hassan@patelholdings.com",    phone: "+1 307 555 0110", title: "Principal",         ownerName: "Iris Burgos", ownerUserId: null,    createdAt: daysAgo(36) },
+    { id: nextContactId(), firstName: "Sofia",    lastName: "Mendoza", email: "sofia@mendozaarch.com",       phone: "+1 415 555 0133", title: "Principal Architect", ownerName: "Iris Burgos", ownerUserId: null,  createdAt: daysAgo(23) },
+    { id: nextContactId(), firstName: "Daniel",   lastName: "Park",    email: "daniel@mendozaarch.com",      phone: "+1 415 555 0134", title: "Senior Architect",  ownerName: "Iris Burgos", ownerUserId: null,    createdAt: daysAgo(23) },
+    { id: nextContactId(), firstName: "Robert",   lastName: "Chen",    email: "robert@chencapital.com",      phone: "+1 212 555 0107", title: "Managing Partner",  ownerName: "Iris Burgos", ownerUserId: null,    createdAt: daysAgo(19) },
 
     // Devon's people
-    { id: nextContactId(), firstName: "Jordan",   lastName: "Bell",    email: "jordan@northstarlogistics.com", phone: "+1 312 555 0177", title: "COO",          ownerName: "Devon Park",     createdAt: daysAgo(37) },
-    { id: nextContactId(), firstName: "Marcus",   lastName: "Cole",    email: "marcus@coleregroup.com",       phone: "+1 213 555 0166", title: "Principal",      ownerName: "Devon Park",     createdAt: daysAgo(15) },
-    { id: nextContactId(), firstName: "Elena",    lastName: "Vasquez", email: "elena@vasquezlaw.com",         phone: "+1 213 555 0212", title: "Outside Counsel", ownerName: "Devon Park",    createdAt: daysAgo(14) },
-    { id: nextContactId(), firstName: "Marisol",  lastName: "Rivera",  email: "marisol@casaverdetacos.com",   phone: "+1 512 555 0199", title: "Founder & Chef",  ownerName: "Devon Park",    createdAt: daysAgo(12) },
-    { id: nextContactId(), firstName: "Diego",    lastName: "Alvarez", email: "diego@casaverdetacos.com",     phone: "+1 512 555 0201", title: "Silent Investor", ownerName: "Devon Park",    createdAt: daysAgo(12) },
-    { id: nextContactId(), firstName: "Camila",   lastName: "Ortiz",   email: "camila@casaverdetacos.com",    phone: "+1 512 555 0202", title: "Silent Investor", ownerName: "Devon Park",    createdAt: daysAgo(12) },
-    { id: nextContactId(), firstName: "Lucas",    lastName: "Park",    email: "lucas@pinewoodoutfitters.com", phone: "+1 702 555 0173", title: "Founder",         ownerName: "Devon Park",    createdAt: daysAgo(10) },
-    { id: nextContactId(), firstName: "Emma",     lastName: "Roth",    email: "emma@rothyoga.com",            phone: "+1 415 555 0193", title: "Founder",         ownerName: "Devon Park",    createdAt: daysAgo(21) },
+    { id: nextContactId(), firstName: "Jordan",   lastName: "Bell",    email: "jordan@northstarlogistics.com", phone: "+1 312 555 0177", title: "COO",          ownerName: "Devon Park", ownerUserId: null,     createdAt: daysAgo(37) },
+    { id: nextContactId(), firstName: "Marcus",   lastName: "Cole",    email: "marcus@coleregroup.com",       phone: "+1 213 555 0166", title: "Principal",      ownerName: "Devon Park", ownerUserId: null,     createdAt: daysAgo(15) },
+    { id: nextContactId(), firstName: "Elena",    lastName: "Vasquez", email: "elena@vasquezlaw.com",         phone: "+1 213 555 0212", title: "Outside Counsel", ownerName: "Devon Park", ownerUserId: null,    createdAt: daysAgo(14) },
+    { id: nextContactId(), firstName: "Marisol",  lastName: "Rivera",  email: "marisol@casaverdetacos.com",   phone: "+1 512 555 0199", title: "Founder & Chef",  ownerName: "Devon Park", ownerUserId: null,    createdAt: daysAgo(12) },
+    { id: nextContactId(), firstName: "Diego",    lastName: "Alvarez", email: "diego@casaverdetacos.com",     phone: "+1 512 555 0201", title: "Silent Investor", ownerName: "Devon Park", ownerUserId: null,    createdAt: daysAgo(12) },
+    { id: nextContactId(), firstName: "Camila",   lastName: "Ortiz",   email: "camila@casaverdetacos.com",    phone: "+1 512 555 0202", title: "Silent Investor", ownerName: "Devon Park", ownerUserId: null,    createdAt: daysAgo(12) },
+    { id: nextContactId(), firstName: "Lucas",    lastName: "Park",    email: "lucas@pinewoodoutfitters.com", phone: "+1 702 555 0173", title: "Founder",         ownerName: "Devon Park", ownerUserId: null,    createdAt: daysAgo(10) },
+    { id: nextContactId(), firstName: "Emma",     lastName: "Roth",    email: "emma@rothyoga.com",            phone: "+1 415 555 0193", title: "Founder",         ownerName: "Devon Park", ownerUserId: null,    createdAt: daysAgo(21) },
 
     // Sara's people
-    { id: nextContactId(), firstName: "Priya",    lastName: "Shah",    email: "priya@meridiancoffee.com",     phone: "+1 646 555 0123", title: "Co-Founder",       ownerName: "Sara Mitchell", createdAt: daysAgo(29) },
-    { id: nextContactId(), firstName: "Naomi",    lastName: "Shah",    email: "naomi@meridiancoffee.com",     phone: "+1 646 555 0124", title: "Co-Founder",       ownerName: "Sara Mitchell", createdAt: daysAgo(29) },
-    { id: nextContactId(), firstName: "Elliot",   lastName: "Marsh",   email: "elliot@cobalthardware.com",    phone: "+1 503 555 0118", title: "Founder",          ownerName: "Sara Mitchell", createdAt: daysAgo(8) },
-    { id: nextContactId(), firstName: "Olivia",   lastName: "Chen",    email: "olivia@cloudpeak.io",          phone: "+1 206 555 0142", title: "Founder & CTO",    ownerName: "Sara Mitchell", createdAt: daysAgo(13) },
-    { id: nextContactId(), firstName: "Noah",     lastName: "Sterling",email: "noah@sterlingequip.com",       phone: "+1 305 555 0151", title: "Co-Owner",         ownerName: "Sara Mitchell", createdAt: daysAgo(18) },
-    { id: nextContactId(), firstName: "Sasha",    lastName: "Brooks",  email: "sasha@sterlingequip.com",      phone: "+1 305 555 0152", title: "Co-Owner",         ownerName: "Sara Mitchell", createdAt: daysAgo(18) },
-    { id: nextContactId(), firstName: "Hannah",   lastName: "Wei",     email: "hannah@weiwellness.com",       phone: "+1 408 555 0164", title: "Founder",          ownerName: "Sara Mitchell", createdAt: daysAgo(9) },
+    { id: nextContactId(), firstName: "Priya",    lastName: "Shah",    email: "priya@meridiancoffee.com",     phone: "+1 646 555 0123", title: "Co-Founder",       ownerName: "Sara Mitchell", ownerUserId: null, createdAt: daysAgo(29) },
+    { id: nextContactId(), firstName: "Naomi",    lastName: "Shah",    email: "naomi@meridiancoffee.com",     phone: "+1 646 555 0124", title: "Co-Founder",       ownerName: "Sara Mitchell", ownerUserId: null, createdAt: daysAgo(29) },
+    { id: nextContactId(), firstName: "Elliot",   lastName: "Marsh",   email: "elliot@cobalthardware.com",    phone: "+1 503 555 0118", title: "Founder",          ownerName: "Sara Mitchell", ownerUserId: null, createdAt: daysAgo(8) },
+    { id: nextContactId(), firstName: "Olivia",   lastName: "Chen",    email: "olivia@cloudpeak.io",          phone: "+1 206 555 0142", title: "Founder & CTO",    ownerName: "Sara Mitchell", ownerUserId: null, createdAt: daysAgo(13) },
+    { id: nextContactId(), firstName: "Noah",     lastName: "Sterling",email: "noah@sterlingequip.com",       phone: "+1 305 555 0151", title: "Co-Owner",         ownerName: "Sara Mitchell", ownerUserId: null, createdAt: daysAgo(18) },
+    { id: nextContactId(), firstName: "Sasha",    lastName: "Brooks",  email: "sasha@sterlingequip.com",      phone: "+1 305 555 0152", title: "Co-Owner",         ownerName: "Sara Mitchell", ownerUserId: null, createdAt: daysAgo(18) },
+    { id: nextContactId(), firstName: "Hannah",   lastName: "Wei",     email: "hannah@weiwellness.com",       phone: "+1 408 555 0164", title: "Founder",          ownerName: "Sara Mitchell", ownerUserId: null, createdAt: daysAgo(9) },
   ];
   store.contacts.push(...contacts);
   const [
@@ -793,7 +814,7 @@ export function seed() {
   const accounts: Account[] = [
     // ─ Iris's accounts ─
     makeAccount({
-      id: nextAccountId(), name: "Helix Labs LLC", ownerName: "Iris Burgos", createdAt: daysAgo(40),
+      id: nextAccountId(), name: "Helix Labs LLC", ownerName: "Iris Burgos", ownerUserId: null, createdAt: daysAgo(40),
       portalId: 219501, state: "Delaware", entityType: "LLC",
       brand: "Delaware LLC Attorney", subscriptionBundle: "Standard", formationTier: "Professional",
       automationStatus: "Succeeded", stripeId: "cus_S1HelixA42jq",
@@ -810,7 +831,7 @@ export function seed() {
       createdByName: "Iris Burgos", lastModifiedAt: daysAgo(1), lastModifiedByName: "Iris Burgos",
     }),
     makeAccount({
-      id: nextAccountId(), name: "Brightline Studios LLC", ownerName: "Iris Burgos", createdAt: daysAgo(50),
+      id: nextAccountId(), name: "Brightline Studios LLC", ownerName: "Iris Burgos", ownerUserId: null, createdAt: daysAgo(50),
       portalId: 219344, state: "New York", entityType: "LLC",
       brand: "NY LLC Attorney", subscriptionBundle: "Standard", formationTier: "Standard",
       automationStatus: "Succeeded", stripeId: "cus_S2Bright9YxQ",
@@ -826,7 +847,7 @@ export function seed() {
       createdByName: "Iris Burgos", lastModifiedAt: daysAgo(7), lastModifiedByName: "Iris Burgos",
     }),
     makeAccount({
-      id: nextAccountId(), name: "Patel Holdings LLC", ownerName: "Iris Burgos", createdAt: daysAgo(34),
+      id: nextAccountId(), name: "Patel Holdings LLC", ownerName: "Iris Burgos", ownerUserId: null, createdAt: daysAgo(34),
       portalId: 219668, state: "Wyoming", entityType: "LLC",
       brand: "Wyoming LLC Attorney", subscriptionBundle: "Standard", formationTier: "Professional",
       automationStatus: "Succeeded", stripeId: "cus_S3Patel88msd",
@@ -843,7 +864,7 @@ export function seed() {
       createdByName: "Iris Burgos", lastModifiedAt: daysAgo(2), lastModifiedByName: "Iris Burgos",
     }),
     makeAccount({
-      id: nextAccountId(), name: "Patel Real Estate LLC", ownerName: "Iris Burgos", createdAt: daysAgo(120),
+      id: nextAccountId(), name: "Patel Real Estate LLC", ownerName: "Iris Burgos", ownerUserId: null, createdAt: daysAgo(120),
       portalId: 215110, state: "Wyoming", entityType: "LLC",
       brand: "Wyoming LLC Attorney", subscriptionBundle: "Standard", formationTier: "Standard",
       automationStatus: "Succeeded", stripeId: "cus_S3Patel88msd",
@@ -859,7 +880,7 @@ export function seed() {
       createdByName: "Platform Integration User", lastModifiedAt: daysAgo(30), lastModifiedByName: "Iris Burgos",
     }),
     makeAccount({
-      id: nextAccountId(), name: "Patel Capital LLC", ownerName: "Iris Burgos", createdAt: daysAgo(220),
+      id: nextAccountId(), name: "Patel Capital LLC", ownerName: "Iris Burgos", ownerUserId: null, createdAt: daysAgo(220),
       portalId: 211889, state: "Delaware", entityType: "LLC",
       brand: "Delaware LLC Attorney", subscriptionBundle: "Premium", formationTier: "Premium",
       automationStatus: "Succeeded", stripeId: "cus_S3Patel88msd",
@@ -876,7 +897,7 @@ export function seed() {
       createdByName: "Platform Integration User", lastModifiedAt: daysAgo(45), lastModifiedByName: "Iris Burgos",
     }),
     makeAccount({
-      id: nextAccountId(), name: "Mendoza Architecture PLLC", ownerName: "Iris Burgos", createdAt: daysAgo(22),
+      id: nextAccountId(), name: "Mendoza Architecture PLLC", ownerName: "Iris Burgos", ownerUserId: null, createdAt: daysAgo(22),
       portalId: 220114, state: "California", entityType: "PLLC",
       brand: "California Pro LLC Attorney", subscriptionBundle: "Premium", formationTier: "Premium",
       automationStatus: "Pending", stripeId: "cus_S4MendzPA77",
@@ -892,7 +913,7 @@ export function seed() {
       createdByName: "Iris Burgos", lastModifiedAt: daysAgo(3), lastModifiedByName: "Iris Burgos",
     }),
     makeAccount({
-      id: nextAccountId(), name: "Chen Capital Partners LLC", ownerName: "Iris Burgos", createdAt: daysAgo(18),
+      id: nextAccountId(), name: "Chen Capital Partners LLC", ownerName: "Iris Burgos", ownerUserId: null, createdAt: daysAgo(18),
       portalId: 220287, state: "Delaware", entityType: "Series LLC",
       brand: "Delaware LLC Attorney", subscriptionBundle: "Premium", formationTier: "Premium",
       automationStatus: "Pending", stripeId: "cus_S5ChenCapA1Q",
@@ -909,7 +930,7 @@ export function seed() {
 
     // ─ Devon's accounts ─
     makeAccount({
-      id: nextAccountId(), name: "Northstar Logistics LLC", ownerName: "Devon Park", createdAt: daysAgo(36),
+      id: nextAccountId(), name: "Northstar Logistics LLC", ownerName: "Devon Park", ownerUserId: null, createdAt: daysAgo(36),
       portalId: 219612, state: "Wyoming", entityType: "LLC",
       brand: "Wyoming LLC Attorney", subscriptionBundle: "Standard", formationTier: "Professional",
       automationStatus: "Succeeded", stripeId: "cus_S6Northstr",
@@ -925,7 +946,7 @@ export function seed() {
       createdByName: "Devon Park", lastModifiedAt: daysAgo(2), lastModifiedByName: "Devon Park",
     }),
     makeAccount({
-      id: nextAccountId(), name: "Cole Real Estate Group LLC", ownerName: "Devon Park", createdAt: daysAgo(14),
+      id: nextAccountId(), name: "Cole Real Estate Group LLC", ownerName: "Devon Park", ownerUserId: null, createdAt: daysAgo(14),
       portalId: 220411, state: "Wyoming", entityType: "LLC",
       brand: "Wyoming LLC Attorney", subscriptionBundle: "Standard", formationTier: "Premium",
       automationStatus: "Pending", stripeId: "cus_S7ColeRE91p",
@@ -939,7 +960,7 @@ export function seed() {
       createdByName: "Devon Park", lastModifiedAt: daysAgo(1), lastModifiedByName: "Devon Park",
     }),
     makeAccount({
-      id: nextAccountId(), name: "Casa Verde Tacos LLC", ownerName: "Devon Park", createdAt: daysAgo(11),
+      id: nextAccountId(), name: "Casa Verde Tacos LLC", ownerName: "Devon Park", ownerUserId: null, createdAt: daysAgo(11),
       portalId: 220502, state: "Texas", entityType: "LLC",
       brand: "Texas LLC Attorney", subscriptionBundle: "Standard", formationTier: "Professional",
       automationStatus: "Succeeded", stripeId: "cus_S8CasaVrd7q",
@@ -955,7 +976,7 @@ export function seed() {
       createdByName: "Devon Park", lastModifiedAt: daysAgo(2), lastModifiedByName: "Devon Park",
     }),
     makeAccount({
-      id: nextAccountId(), name: "Pinewood Outfitters LLC", ownerName: "Devon Park", createdAt: daysAgo(9),
+      id: nextAccountId(), name: "Pinewood Outfitters LLC", ownerName: "Devon Park", ownerUserId: null, createdAt: daysAgo(9),
       portalId: 220578, state: "Nevada", entityType: "LLC",
       brand: "Nevada LLC Attorney", subscriptionBundle: "Premium", formationTier: "Professional",
       automationStatus: "Pending", stripeId: "cus_S9Pinewd33s",
@@ -969,7 +990,7 @@ export function seed() {
       createdByName: "Devon Park", lastModifiedAt: daysAgo(3), lastModifiedByName: "Devon Park",
     }),
     makeAccount({
-      id: nextAccountId(), name: "Roth Yoga Collective LLC", ownerName: "Devon Park", createdAt: daysAgo(20),
+      id: nextAccountId(), name: "Roth Yoga Collective LLC", ownerName: "Devon Park", ownerUserId: null, createdAt: daysAgo(20),
       portalId: 219771, state: "California", entityType: "LLC",
       brand: "California LLC Attorney", subscriptionBundle: "Basic", formationTier: "Standard",
       automationStatus: "Succeeded", stripeId: "cus_S10RothYg5",
@@ -987,7 +1008,7 @@ export function seed() {
 
     // ─ Sara's accounts ─
     makeAccount({
-      id: nextAccountId(), name: "Meridian Coffee LLC", ownerName: "Sara Mitchell", createdAt: daysAgo(28),
+      id: nextAccountId(), name: "Meridian Coffee LLC", ownerName: "Sara Mitchell", ownerUserId: null, createdAt: daysAgo(28),
       portalId: 219901, state: "Texas", entityType: "LLC",
       brand: "Texas LLC Attorney", subscriptionBundle: "Standard", formationTier: "Standard",
       automationStatus: "Succeeded", stripeId: "cus_S11Meridn22",
@@ -1002,7 +1023,7 @@ export function seed() {
       createdByName: "Sara Mitchell", lastModifiedAt: daysAgo(3), lastModifiedByName: "Sara Mitchell",
     }),
     makeAccount({
-      id: nextAccountId(), name: "Cobalt Hardware LLC", ownerName: "Sara Mitchell", createdAt: daysAgo(7),
+      id: nextAccountId(), name: "Cobalt Hardware LLC", ownerName: "Sara Mitchell", ownerUserId: null, createdAt: daysAgo(7),
       portalId: 220601, state: "Delaware", entityType: "LLC",
       brand: "Delaware LLC Attorney", subscriptionBundle: "Premium", formationTier: "Premium",
       automationStatus: "Pending", stripeId: "cus_S12CobaltH7",
@@ -1016,7 +1037,7 @@ export function seed() {
       createdByName: "Sara Mitchell", lastModifiedAt: daysAgo(3), lastModifiedByName: "Sara Mitchell",
     }),
     makeAccount({
-      id: nextAccountId(), name: "Cloudpeak Software LLC", ownerName: "Sara Mitchell", createdAt: daysAgo(12),
+      id: nextAccountId(), name: "Cloudpeak Software LLC", ownerName: "Sara Mitchell", ownerUserId: null, createdAt: daysAgo(12),
       portalId: 220488, state: "Delaware", entityType: "LLC",
       brand: "Delaware LLC Attorney", subscriptionBundle: "Standard", formationTier: "Professional",
       automationStatus: "Succeeded", stripeId: "cus_S13Cloudpk1",
@@ -1032,7 +1053,7 @@ export function seed() {
       createdByName: "Sara Mitchell", lastModifiedAt: daysAgo(1), lastModifiedByName: "Sara Mitchell",
     }),
     makeAccount({
-      id: nextAccountId(), name: "Sterling Equipment Co LLC", ownerName: "Sara Mitchell", createdAt: daysAgo(17),
+      id: nextAccountId(), name: "Sterling Equipment Co LLC", ownerName: "Sara Mitchell", ownerUserId: null, createdAt: daysAgo(17),
       portalId: 220215, state: "Florida", entityType: "LLC",
       brand: "Florida LLC Attorney", subscriptionBundle: "Standard", formationTier: "Standard",
       automationStatus: "Pending", stripeId: "cus_S14Sterlng4",
@@ -1046,7 +1067,7 @@ export function seed() {
       createdByName: "Sara Mitchell", lastModifiedAt: daysAgo(2), lastModifiedByName: "Sara Mitchell",
     }),
     makeAccount({
-      id: nextAccountId(), name: "Wei Wellness Studio LLC", ownerName: "Sara Mitchell", createdAt: daysAgo(8),
+      id: nextAccountId(), name: "Wei Wellness Studio LLC", ownerName: "Sara Mitchell", ownerUserId: null, createdAt: daysAgo(8),
       portalId: 220559, state: "California", entityType: "LLC",
       brand: "California LLC Attorney", subscriptionBundle: "Basic", formationTier: "Standard",
       automationStatus: "Succeeded", stripeId: "cus_S15WeiWell3",
@@ -1142,7 +1163,7 @@ export function seed() {
       description:
         "Forming Helix Labs LLC in Delaware. Drafting the Certificate of Formation, appointing Corporate Service Company (CSC) as Delaware registered agent, and filing with the DE Division of Corporations ($110). Single-member LLC, pass-through taxation, $300 annual franchise tax.",
       tags: ["DE", "articles-of-organization", "registered-agent", "single-member"],
-      ownerName: "Iris Burgos", createdAt: daysAgo(22), updatedAt: daysAgo(1),
+      ownerName: "Iris Burgos", ownerUserId: null, createdAt: daysAgo(22), updatedAt: daysAgo(1),
     },
     {
       id: nextCaseId(), caseNumber: nextCaseNumber(),
@@ -1152,7 +1173,7 @@ export function seed() {
       description:
         "Brightline Studios LLC formed in New York County. Completed the mandatory 6-week publication in two newspapers designated by the County Clerk (one daily + one weekly). Filed the Certificate of Publication and affidavits of publication with the NY Department of State.",
       tags: ["NY", "publication", "certificate-of-publication", "formation"],
-      ownerName: "Iris Burgos", createdAt: daysAgo(45), updatedAt: daysAgo(7),
+      ownerName: "Iris Burgos", ownerUserId: null, createdAt: daysAgo(45), updatedAt: daysAgo(7),
     },
     {
       id: nextCaseId(), caseNumber: nextCaseNumber(),
@@ -1162,7 +1183,7 @@ export function seed() {
       description:
         "Forming Patel Holdings LLC in Wyoming for passive investment holdings. Wyoming's $100 filing fee + $60 annual report is the lowest in the country. Anonymous ownership permitted — only the registered agent appears on the public record. Targeting Northwest Registered Agent. Will draft a one-member operating agreement focused on holdco/investment provisions.",
       tags: ["WY", "articles-of-organization", "single-member", "holdco", "anonymous"],
-      ownerName: "Iris Burgos", createdAt: daysAgo(4), updatedAt: daysAgo(2),
+      ownerName: "Iris Burgos", ownerUserId: null, createdAt: daysAgo(4), updatedAt: daysAgo(2),
     },
     {
       id: nextCaseId(), caseNumber: nextCaseNumber(),
@@ -1172,7 +1193,7 @@ export function seed() {
       description:
         "Sofia is a licensed architect in California — by law, professional services must use a Professional LLC (PLLC) rather than a standard LLC. Filing Articles of Organization (Form LLC-1) plus a Professional Limited Liability Company election with the California Architects Board. All members must hold active CA architect licenses. $70 SOS filing fee + $800 annual franchise tax.",
       tags: ["CA", "pllc", "professional", "articles-of-organization", "form-llc-1"],
-      ownerName: "Iris Burgos", createdAt: daysAgo(22), updatedAt: daysAgo(3),
+      ownerName: "Iris Burgos", ownerUserId: null, createdAt: daysAgo(22), updatedAt: daysAgo(3),
     },
     {
       id: nextCaseId(), caseNumber: nextCaseNumber(),
@@ -1182,7 +1203,7 @@ export function seed() {
       description:
         "Setting up a Delaware Series LLC for Chen Capital. Master LLC + protected internal series for each fund vehicle. Each series can hold separate assets and liabilities with internal liability isolation, but only the master files at the state level. Drafting the master Operating Agreement and per-series designation memoranda. Awaiting client confirmation on initial number of series.",
       tags: ["DE", "series-llc", "operating-agreement", "fund-formation"],
-      ownerName: "Iris Burgos", createdAt: daysAgo(18), updatedAt: daysAgo(5),
+      ownerName: "Iris Burgos", ownerUserId: null, createdAt: daysAgo(18), updatedAt: daysAgo(5),
     },
 
     // Devon's queue (5)
@@ -1194,7 +1215,7 @@ export function seed() {
       description:
         "Northstar Logistics LLC (Wyoming-formed) is opening a freight hub in Long Beach. Filing Form LLC-5 (Application to Register a Foreign LLC) with the CA Secretary of State, designating a California registered agent, and registering with the CA Franchise Tax Board for the $800 annual minimum tax. Statement of Information (Form LLC-12) follows within 90 days.",
       tags: ["CA", "WY", "foreign-qualification", "form-llc-5", "franchise-tax"],
-      ownerName: "Devon Park", createdAt: daysAgo(14), updatedAt: daysAgo(2),
+      ownerName: "Devon Park", ownerUserId: null, createdAt: daysAgo(14), updatedAt: daysAgo(2),
     },
     {
       id: nextCaseId(), caseNumber: nextCaseNumber(),
@@ -1204,7 +1225,7 @@ export function seed() {
       description:
         "Forming a Wyoming holding LLC for asset protection (anonymous ownership, $60 annual report). Marcus holds investment properties in FL, AZ, and NV — once the WY holdco is filed, the FL/AZ/NV foreign qualifications follow as separate matters. Each requires a Certificate of Good Standing from Wyoming. Critical timing: Marcus closes on FL property in 3 weeks.",
       tags: ["WY", "articles-of-organization", "holdco", "real-estate", "asset-protection"],
-      ownerName: "Devon Park", createdAt: daysAgo(4), updatedAt: daysAgo(1),
+      ownerName: "Devon Park", ownerUserId: null, createdAt: daysAgo(4), updatedAt: daysAgo(1),
     },
     {
       id: nextCaseId(), caseNumber: nextCaseNumber(),
@@ -1214,7 +1235,7 @@ export function seed() {
       description:
         "Forming Casa Verde Tacos LLC in Texas — three-member structure (founder + two silent investors). Filing Form 205 (Certificate of Formation) with TX SOS, $300 filing fee. Drafting multi-member Operating Agreement with profit allocation and capital contribution schedule. CT Corporation appointed as TX registered agent. Will follow with EIN and Texas Comptroller franchise tax registration.",
       tags: ["TX", "form-205", "certificate-of-formation", "multi-member", "restaurant"],
-      ownerName: "Devon Park", createdAt: daysAgo(11), updatedAt: daysAgo(2),
+      ownerName: "Devon Park", ownerUserId: null, createdAt: daysAgo(11), updatedAt: daysAgo(2),
     },
     {
       id: nextCaseId(), caseNumber: nextCaseNumber(),
@@ -1224,7 +1245,7 @@ export function seed() {
       description:
         "Forming Pinewood Outfitters LLC in Nevada. Lucas wants Nevada specifically for the privacy posture (no public member disclosure) and the absence of state income tax. Filing Articles of Organization + initial List of Managers/Members ($425 combined) with NV Secretary of State. Annual list + business license renewal: $350. Engaging Northwest Registered Agent as the NV resident agent.",
       tags: ["NV", "articles-of-organization", "single-member", "outdoor-retail"],
-      ownerName: "Devon Park", createdAt: daysAgo(9), updatedAt: daysAgo(3),
+      ownerName: "Devon Park", ownerUserId: null, createdAt: daysAgo(9), updatedAt: daysAgo(3),
     },
     {
       id: nextCaseId(), caseNumber: nextCaseNumber(),
@@ -1234,7 +1255,7 @@ export function seed() {
       description:
         "Emma is buying out her departing co-founder. Drafting an amendment to the Operating Agreement: revised capital accounts, redemption of the departing member's units, and new sole-member governance provisions. Buyout structured as a 24-month installment per the original OA's redemption clause. State filings: none required (operating agreement is internal), but new EIN-on-file member info will go to Wells Fargo.",
       tags: ["CA", "operating-agreement", "member-buyout", "amendment"],
-      ownerName: "Devon Park", createdAt: daysAgo(20), updatedAt: daysAgo(4),
+      ownerName: "Devon Park", ownerUserId: null, createdAt: daysAgo(20), updatedAt: daysAgo(4),
     },
 
     // Sara's queue (5)
@@ -1246,7 +1267,7 @@ export function seed() {
       description:
         "Meridian Coffee LLC formed in Texas last week. Submitted IRS Form SS-4 to obtain an Employer Identification Number — awaiting CP 575 confirmation letter (typical 1–2 weeks). Drafting a multi-member Operating Agreement with profit/loss allocation, capital contributions, and member voting thresholds. Once EIN arrives, opening business bank account with Chase.",
       tags: ["TX", "ein", "form-ss-4", "operating-agreement", "multi-member"],
-      ownerName: "Sara Mitchell", createdAt: daysAgo(9), updatedAt: daysAgo(3),
+      ownerName: "Sara Mitchell", ownerUserId: null, createdAt: daysAgo(9), updatedAt: daysAgo(3),
     },
     {
       id: nextCaseId(), caseNumber: nextCaseNumber(),
@@ -1256,7 +1277,7 @@ export function seed() {
       description:
         "Single-member Delaware LLC formation for a hardware retail expansion. Filing Certificate of Formation with DE Division of Corporations ($110 + $50 24-hour expedite). CSC appointed as Delaware registered agent. Elliot needs an EIN immediately to open a Mercury business account — applying via IRS online portal the same day the DE filing confirms. End-to-end target: 10 days.",
       tags: ["DE", "articles-of-organization", "ein", "form-ss-4", "single-member", "retail"],
-      ownerName: "Sara Mitchell", createdAt: daysAgo(3), updatedAt: daysAgo(3),
+      ownerName: "Sara Mitchell", ownerUserId: null, createdAt: daysAgo(3), updatedAt: daysAgo(3),
     },
     {
       id: nextCaseId(), caseNumber: nextCaseNumber(),
@@ -1266,7 +1287,7 @@ export function seed() {
       description:
         "Forming Cloudpeak Software LLC in Delaware — single-member tech company, founder based in Seattle. DE chosen for investor familiarity (likely series-funded later). Drafting Certificate of Formation, appointing Harvard Business Services as DE registered agent ($55/yr), and preparing a disregarded-entity tax election filing. EIN application via Form SS-4 follows formation confirmation.",
       tags: ["DE", "articles-of-organization", "single-member", "software", "disregarded-entity"],
-      ownerName: "Sara Mitchell", createdAt: daysAgo(12), updatedAt: daysAgo(1),
+      ownerName: "Sara Mitchell", ownerUserId: null, createdAt: daysAgo(12), updatedAt: daysAgo(1),
     },
     {
       id: nextCaseId(), caseNumber: nextCaseNumber(),
@@ -1276,7 +1297,7 @@ export function seed() {
       description:
         "Forming Sterling Equipment Co LLC in Florida — heavy equipment rental, two-member structure. Filing FL Articles of Organization ($125, includes designation of registered agent + initial annual report) with the FL Division of Corporations. Drafting two-member Operating Agreement with profit split, working-capital contribution schedule, and unanimous consent on equipment purchases >$50K.",
       tags: ["FL", "articles-of-organization", "multi-member", "equipment-rental"],
-      ownerName: "Sara Mitchell", createdAt: daysAgo(17), updatedAt: daysAgo(2),
+      ownerName: "Sara Mitchell", ownerUserId: null, createdAt: daysAgo(17), updatedAt: daysAgo(2),
     },
     {
       id: nextCaseId(), caseNumber: nextCaseNumber(),
@@ -1286,7 +1307,7 @@ export function seed() {
       description:
         "Forming Wei Wellness Studio LLC in California — single-member yoga + wellness studio in San Jose. Filing CA Form LLC-1 (Articles of Organization, $70). Statement of Information (Form LLC-12) due within 90 days of formation ($20, biennial thereafter). Hannah is exempt from the first-year $800 franchise tax under the 2021 AB-85 exemption — calendaring the second-year payment as a reminder.",
       tags: ["CA", "form-llc-1", "form-llc-12", "single-member", "franchise-tax-exemption"],
-      ownerName: "Sara Mitchell", createdAt: daysAgo(8), updatedAt: daysAgo(1),
+      ownerName: "Sara Mitchell", ownerUserId: null, createdAt: daysAgo(8), updatedAt: daysAgo(1),
     },
   ];
   store.cases.push(...cases);
@@ -1393,39 +1414,39 @@ export function seed() {
 
   // ── Case interactions (phone/email/meeting logs) ────────────────────────
   store.caseInteractions.push(
-    { id: nextCaseInteractionId(), caseId: c1.id, direction: "outbound", channel: "email",   summary: "Sent draft Certificate of Formation for Helix Labs LLC for Amelia's sign-off.", contact: "Amelia Reyes", byName: "Iris Burgos", createdAt: daysAgo(18) },
-    { id: nextCaseInteractionId(), caseId: c1.id, direction: "inbound",  channel: "email",   summary: "Amelia confirmed entity name and provided single-member info.",                 contact: "Amelia Reyes", byName: "Iris Burgos", createdAt: daysAgo(16) },
-    { id: nextCaseInteractionId(), caseId: c3.id, direction: "inbound",  channel: "phone",   summary: "Hassan walked through his investment portfolio — confirmed WY for anonymity + low fees.", contact: "Hassan Patel",  byName: "Iris Burgos", createdAt: daysAgo(4) },
-    { id: nextCaseInteractionId(), caseId: c4.id, direction: "outbound", channel: "email",   summary: "Sent CA PLLC checklist + verified all members' active architect licenses.",       contact: "Sofia Mendoza", byName: "Iris Burgos", createdAt: daysAgo(18) },
-    { id: nextCaseInteractionId(), caseId: c5.id, direction: "outbound", channel: "meeting", summary: "Working session on Series LLC structure — Robert confirmed 3 initial series.",   contact: "Robert Chen",  byName: "Iris Burgos", createdAt: daysAgo(14) },
-    { id: nextCaseInteractionId(), caseId: c6.id, direction: "outbound", channel: "email",   summary: "Walked Jordan through CA foreign qualification + $800 franchise tax surprise.", contact: "Jordan Bell",  byName: "Devon Park", createdAt: daysAgo(11) },
-    { id: nextCaseInteractionId(), caseId: c7.id, direction: "inbound",  channel: "phone",   summary: "Initial consult with Marcus on WY holdco + 3-state foreign qualification strategy.", contact: "Marcus Cole", byName: "Devon Park", createdAt: daysAgo(4) },
-    { id: nextCaseInteractionId(), caseId: c8.id, direction: "inbound",  channel: "meeting", summary: "Kickoff with Marisol + two silent investors. Confirmed 3-member structure.",     contact: "Marisol Rivera", byName: "Devon Park", createdAt: daysAgo(10) },
-    { id: nextCaseInteractionId(), caseId: c9.id, direction: "outbound", channel: "email",   summary: "Sent NV state filing fees breakdown — confirmed Lucas wants NV for privacy.",   contact: "Lucas Park",   byName: "Devon Park", createdAt: daysAgo(7) },
-    { id: nextCaseInteractionId(), caseId: c10.id, direction: "inbound", channel: "phone",   summary: "Emma confirmed buyout terms — 24-month installment per original OA redemption clause.", contact: "Emma Roth", byName: "Devon Park", createdAt: daysAgo(15) },
-    { id: nextCaseInteractionId(), caseId: c11.id, direction: "inbound", channel: "phone",   summary: "Priya asked when EIN should arrive — explained IRS 1–2 week turnaround.",        contact: "Priya Shah",   byName: "Sara Mitchell", createdAt: daysAgo(5) },
-    { id: nextCaseInteractionId(), caseId: c12.id, direction: "inbound", channel: "phone",   summary: "Initial consult — Elliot wants formation + EIN done in 10 days for Mercury account.", contact: "Elliot Marsh", byName: "Sara Mitchell", createdAt: daysAgo(3) },
-    { id: nextCaseInteractionId(), caseId: c13.id, direction: "outbound", channel: "email",  summary: "Sent Olivia the DE registered-agent comparison: Harvard ($55) vs CSC ($350).",   contact: "Olivia Chen",  byName: "Sara Mitchell", createdAt: daysAgo(9) },
-    { id: nextCaseInteractionId(), caseId: c14.id, direction: "outbound", channel: "email",  summary: "Sent Noah the 2-member OA draft with equipment-purchase consent threshold ($50K).", contact: "Noah Sterling", byName: "Sara Mitchell", createdAt: daysAgo(12) },
-    { id: nextCaseInteractionId(), caseId: c15.id, direction: "outbound", channel: "email",  summary: "Walked Hannah through CA AB-85 first-year franchise tax exemption.",              contact: "Hannah Wei",   byName: "Sara Mitchell", createdAt: daysAgo(6) },
+    { id: nextCaseInteractionId(), caseId: c1.id, direction: "outbound", channel: "email",   summary: "Sent draft Certificate of Formation for Helix Labs LLC for Amelia's sign-off.", contact: "Amelia Reyes", byName: "Iris Burgos", byUserId: null, createdAt: daysAgo(18) },
+    { id: nextCaseInteractionId(), caseId: c1.id, direction: "inbound",  channel: "email",   summary: "Amelia confirmed entity name and provided single-member info.",                 contact: "Amelia Reyes", byName: "Iris Burgos", byUserId: null, createdAt: daysAgo(16) },
+    { id: nextCaseInteractionId(), caseId: c3.id, direction: "inbound",  channel: "phone",   summary: "Hassan walked through his investment portfolio — confirmed WY for anonymity + low fees.", contact: "Hassan Patel",  byName: "Iris Burgos", byUserId: null, createdAt: daysAgo(4) },
+    { id: nextCaseInteractionId(), caseId: c4.id, direction: "outbound", channel: "email",   summary: "Sent CA PLLC checklist + verified all members' active architect licenses.",       contact: "Sofia Mendoza", byName: "Iris Burgos", byUserId: null, createdAt: daysAgo(18) },
+    { id: nextCaseInteractionId(), caseId: c5.id, direction: "outbound", channel: "meeting", summary: "Working session on Series LLC structure — Robert confirmed 3 initial series.",   contact: "Robert Chen",  byName: "Iris Burgos", byUserId: null, createdAt: daysAgo(14) },
+    { id: nextCaseInteractionId(), caseId: c6.id, direction: "outbound", channel: "email",   summary: "Walked Jordan through CA foreign qualification + $800 franchise tax surprise.", contact: "Jordan Bell",  byName: "Devon Park", byUserId: null, createdAt: daysAgo(11) },
+    { id: nextCaseInteractionId(), caseId: c7.id, direction: "inbound",  channel: "phone",   summary: "Initial consult with Marcus on WY holdco + 3-state foreign qualification strategy.", contact: "Marcus Cole", byName: "Devon Park", byUserId: null, createdAt: daysAgo(4) },
+    { id: nextCaseInteractionId(), caseId: c8.id, direction: "inbound",  channel: "meeting", summary: "Kickoff with Marisol + two silent investors. Confirmed 3-member structure.",     contact: "Marisol Rivera", byName: "Devon Park", byUserId: null, createdAt: daysAgo(10) },
+    { id: nextCaseInteractionId(), caseId: c9.id, direction: "outbound", channel: "email",   summary: "Sent NV state filing fees breakdown — confirmed Lucas wants NV for privacy.",   contact: "Lucas Park",   byName: "Devon Park", byUserId: null, createdAt: daysAgo(7) },
+    { id: nextCaseInteractionId(), caseId: c10.id, direction: "inbound", channel: "phone",   summary: "Emma confirmed buyout terms — 24-month installment per original OA redemption clause.", contact: "Emma Roth", byName: "Devon Park", byUserId: null, createdAt: daysAgo(15) },
+    { id: nextCaseInteractionId(), caseId: c11.id, direction: "inbound", channel: "phone",   summary: "Priya asked when EIN should arrive — explained IRS 1–2 week turnaround.",        contact: "Priya Shah",   byName: "Sara Mitchell", byUserId: null, createdAt: daysAgo(5) },
+    { id: nextCaseInteractionId(), caseId: c12.id, direction: "inbound", channel: "phone",   summary: "Initial consult — Elliot wants formation + EIN done in 10 days for Mercury account.", contact: "Elliot Marsh", byName: "Sara Mitchell", byUserId: null, createdAt: daysAgo(3) },
+    { id: nextCaseInteractionId(), caseId: c13.id, direction: "outbound", channel: "email",  summary: "Sent Olivia the DE registered-agent comparison: Harvard ($55) vs CSC ($350).",   contact: "Olivia Chen",  byName: "Sara Mitchell", byUserId: null, createdAt: daysAgo(9) },
+    { id: nextCaseInteractionId(), caseId: c14.id, direction: "outbound", channel: "email",  summary: "Sent Noah the 2-member OA draft with equipment-purchase consent threshold ($50K).", contact: "Noah Sterling", byName: "Sara Mitchell", byUserId: null, createdAt: daysAgo(12) },
+    { id: nextCaseInteractionId(), caseId: c15.id, direction: "outbound", channel: "email",  summary: "Walked Hannah through CA AB-85 first-year franchise tax exemption.",              contact: "Hannah Wei",   byName: "Sara Mitchell", byUserId: null, createdAt: daysAgo(6) },
   );
 
   // ── Thread entries (team-only commentary) ────────────────────────────────
   store.threadEntries.push(
-    { id: nextThreadEntryId(), caseId: c1.id, authorName: "Iris Burgos",   body: "Kicked off Helix DE formation — Amelia confirmed 'Helix Labs LLC' as the entity name.",   createdAt: daysAgo(22) },
-    { id: nextThreadEntryId(), caseId: c1.id, authorName: "Iris Burgos",   body: "Once DE confirms filing, we'll fire off the SS-4 for the EIN. End of next week target.",  createdAt: daysAgo(2) },
-    { id: nextThreadEntryId(), caseId: c3.id, authorName: "Iris Burgos",   body: "Hassan really values the WY privacy posture. Pure passive holdco — minimal OA needed.",   createdAt: daysAgo(3) },
-    { id: nextThreadEntryId(), caseId: c4.id, authorName: "Iris Burgos",   body: "PLLC requires ALL members hold active CA licenses. Confirmed both Sofia and her partner are current.", createdAt: daysAgo(15) },
-    { id: nextThreadEntryId(), caseId: c5.id, authorName: "Iris Burgos",   body: "Series LLC is unusual — DE handles it cleanly but most other states don't honor the liability shield. Sticking with DE.", createdAt: daysAgo(14) },
-    { id: nextThreadEntryId(), caseId: c7.id, authorName: "Devon Park",    body: "Critical priority — Marcus closes on FL property in 3 weeks. WY filing must move first.", createdAt: daysAgo(3) },
-    { id: nextThreadEntryId(), caseId: c8.id, authorName: "Devon Park",    body: "Casa Verde is a 3-member structure. Reusing the Westbrook OA template — saves a day.",   createdAt: daysAgo(10) },
-    { id: nextThreadEntryId(), caseId: c9.id, authorName: "Devon Park",    body: "Lucas wants NV specifically for the privacy. Walked him through the $425 + $200 license fee combo.", createdAt: daysAgo(7) },
-    { id: nextThreadEntryId(), caseId: c10.id, authorName: "Devon Park",   body: "Buyout is structured per the original OA clause — no surprises. 24-month installment.",  createdAt: daysAgo(10) },
-    { id: nextThreadEntryId(), caseId: c11.id, authorName: "Sara Mitchell",body: "EIN should land any day. Once it does, I'll finalize the multi-member OA and open the Chase account.", createdAt: daysAgo(3) },
-    { id: nextThreadEntryId(), caseId: c12.id, authorName: "Sara Mitchell",body: "Tight timeline — Elliot needs Mercury account in ~10 days. Going with the $50 expedite, EIN same-day via IRS online.", createdAt: daysAgo(3) },
-    { id: nextThreadEntryId(), caseId: c13.id, authorName: "Sara Mitchell",body: "Cloudpeak is series-fundable later — DE is the right call. Disregarded entity for now since it's single-member.", createdAt: daysAgo(8) },
-    { id: nextThreadEntryId(), caseId: c14.id, authorName: "Sara Mitchell",body: "Sterling is heavy equipment — added a $50K consent threshold so neither member can unilaterally take on big capex.", createdAt: daysAgo(12) },
-    { id: nextThreadEntryId(), caseId: c15.id, authorName: "Sara Mitchell",body: "Hannah qualifies for the AB-85 first-year franchise tax exemption. Calendared the second-year reminder.", createdAt: daysAgo(6) },
+    { id: nextThreadEntryId(), caseId: c1.id, authorName: "Iris Burgos", authorUserId: null,   body: "Kicked off Helix DE formation — Amelia confirmed 'Helix Labs LLC' as the entity name.",   createdAt: daysAgo(22) },
+    { id: nextThreadEntryId(), caseId: c1.id, authorName: "Iris Burgos", authorUserId: null,   body: "Once DE confirms filing, we'll fire off the SS-4 for the EIN. End of next week target.",  createdAt: daysAgo(2) },
+    { id: nextThreadEntryId(), caseId: c3.id, authorName: "Iris Burgos", authorUserId: null,   body: "Hassan really values the WY privacy posture. Pure passive holdco — minimal OA needed.",   createdAt: daysAgo(3) },
+    { id: nextThreadEntryId(), caseId: c4.id, authorName: "Iris Burgos", authorUserId: null,   body: "PLLC requires ALL members hold active CA licenses. Confirmed both Sofia and her partner are current.", createdAt: daysAgo(15) },
+    { id: nextThreadEntryId(), caseId: c5.id, authorName: "Iris Burgos", authorUserId: null,   body: "Series LLC is unusual — DE handles it cleanly but most other states don't honor the liability shield. Sticking with DE.", createdAt: daysAgo(14) },
+    { id: nextThreadEntryId(), caseId: c7.id, authorName: "Devon Park", authorUserId: null,    body: "Critical priority — Marcus closes on FL property in 3 weeks. WY filing must move first.", createdAt: daysAgo(3) },
+    { id: nextThreadEntryId(), caseId: c8.id, authorName: "Devon Park", authorUserId: null,    body: "Casa Verde is a 3-member structure. Reusing the Westbrook OA template — saves a day.",   createdAt: daysAgo(10) },
+    { id: nextThreadEntryId(), caseId: c9.id, authorName: "Devon Park", authorUserId: null,    body: "Lucas wants NV specifically for the privacy. Walked him through the $425 + $200 license fee combo.", createdAt: daysAgo(7) },
+    { id: nextThreadEntryId(), caseId: c10.id, authorName: "Devon Park", authorUserId: null,   body: "Buyout is structured per the original OA clause — no surprises. 24-month installment.",  createdAt: daysAgo(10) },
+    { id: nextThreadEntryId(), caseId: c11.id, authorName: "Sara Mitchell", authorUserId: null,body: "EIN should land any day. Once it does, I'll finalize the multi-member OA and open the Chase account.", createdAt: daysAgo(3) },
+    { id: nextThreadEntryId(), caseId: c12.id, authorName: "Sara Mitchell", authorUserId: null,body: "Tight timeline — Elliot needs Mercury account in ~10 days. Going with the $50 expedite, EIN same-day via IRS online.", createdAt: daysAgo(3) },
+    { id: nextThreadEntryId(), caseId: c13.id, authorName: "Sara Mitchell", authorUserId: null,body: "Cloudpeak is series-fundable later — DE is the right call. Disregarded entity for now since it's single-member.", createdAt: daysAgo(8) },
+    { id: nextThreadEntryId(), caseId: c14.id, authorName: "Sara Mitchell", authorUserId: null,body: "Sterling is heavy equipment — added a $50K consent threshold so neither member can unilaterally take on big capex.", createdAt: daysAgo(12) },
+    { id: nextThreadEntryId(), caseId: c15.id, authorName: "Sara Mitchell", authorUserId: null,body: "Hannah qualifies for the AB-85 first-year franchise tax exemption. Calendared the second-year reminder.", createdAt: daysAgo(6) },
   );
 
   // ── Leads (pre-sale prospects) ──────────────────────────────────────────
@@ -1437,7 +1458,7 @@ export function seed() {
       companyName: "Maya Chen Ventures (tentative)", intendedState: "DE", intendedEntityType: "LLC",
       source: "website", status: "qualified",
       notes: "Solo founder, ex-Stripe. Wants DE for future fundraise. Ready to file once she finalizes the name.",
-      ownerName: "Iris Burgos",
+      ownerName: "Iris Burgos", ownerUserId: null,
       estimatedValue: 1500,
       convertedAt: null, convertedAccountId: null, convertedContactId: null,
       createdAt: daysAgo(6), updatedAt: daysAgo(1),
@@ -1449,7 +1470,7 @@ export function seed() {
       companyName: "Walsh Consulting LLC", intendedState: "MA", intendedEntityType: "LLC",
       source: "referral", status: "working",
       notes: "Referred by Robert Chen. Independent consultant. Needs basic MA LLC + EIN. Targeting end of month.",
-      ownerName: "Iris Burgos",
+      ownerName: "Iris Burgos", ownerUserId: null,
       estimatedValue: 950,
       convertedAt: null, convertedAccountId: null, convertedContactId: null,
       createdAt: daysAgo(4), updatedAt: daysAgo(1),
@@ -1461,7 +1482,7 @@ export function seed() {
       companyName: "Booker Beauty Collective", intendedState: "GA", intendedEntityType: "LLC",
       source: "event", status: "new",
       notes: "Met at Atlanta small-business expo. Wants to launch a 3-member beauty product LLC. Needs OA help.",
-      ownerName: "Devon Park",
+      ownerName: "Devon Park", ownerUserId: null,
       estimatedValue: 1800,
       convertedAt: null, convertedAccountId: null, convertedContactId: null,
       createdAt: daysAgo(2), updatedAt: daysAgo(2),
@@ -1473,7 +1494,7 @@ export function seed() {
       companyName: "Tanner Studios LLC", intendedState: "CA", intendedEntityType: "LLC",
       source: "website", status: "working",
       notes: "Indie film production. Will need single-member CA LLC + handling of the $800 franchise tax.",
-      ownerName: "Devon Park",
+      ownerName: "Devon Park", ownerUserId: null,
       estimatedValue: 1200,
       convertedAt: null, convertedAccountId: null, convertedContactId: null,
       createdAt: daysAgo(5), updatedAt: daysAgo(2),
@@ -1485,7 +1506,7 @@ export function seed() {
       companyName: null, intendedState: "CA", intendedEntityType: "LLC",
       source: "cold_call", status: "unqualified",
       notes: "Food truck operator. Cold called us looking for the cheapest option. Better fit for a self-service tool — not our ICP.",
-      ownerName: "Sara Mitchell",
+      ownerName: "Sara Mitchell", ownerUserId: null,
       estimatedValue: null,
       convertedAt: null, convertedAccountId: null, convertedContactId: null,
       createdAt: daysAgo(8), updatedAt: daysAgo(7),
@@ -1497,7 +1518,7 @@ export function seed() {
       companyName: "Horizon Biolabs LLC", intendedState: "DE", intendedEntityType: "LLC",
       source: "referral", status: "qualified",
       notes: "Biotech founder, pre-seed. Referred by Olivia Chen at Cloudpeak. Needs DE LLC + EIN + simple OA.",
-      ownerName: "Sara Mitchell",
+      ownerName: "Sara Mitchell", ownerUserId: null,
       estimatedValue: 1600,
       convertedAt: null, convertedAccountId: null, convertedContactId: null,
       createdAt: daysAgo(3), updatedAt: daysAgo(1),
@@ -1509,7 +1530,7 @@ export function seed() {
       companyName: "O'Sullivan Properties", intendedState: "WY", intendedEntityType: "LLC (Holdco)",
       source: "partner", status: "new",
       notes: "Partner referral from a CPA firm. Wants a WY holdco for 4 Illinois rentals. Will likely become 4 foreign quals.",
-      ownerName: "Devon Park",
+      ownerName: "Devon Park", ownerUserId: null,
       estimatedValue: 4200,
       convertedAt: null, convertedAccountId: null, convertedContactId: null,
       createdAt: daysAgo(1), updatedAt: daysAgo(1),
@@ -1521,7 +1542,7 @@ export function seed() {
       companyName: "Park Family Dental PLLC", intendedState: "CA", intendedEntityType: "PLLC",
       source: "website", status: "new",
       notes: "Licensed CA dentist opening a private practice. PLLC required. Easy fit for our standard pro-services package.",
-      ownerName: "Iris Burgos",
+      ownerName: "Iris Burgos", ownerUserId: null,
       estimatedValue: 1400,
       convertedAt: null, convertedAccountId: null, convertedContactId: null,
       createdAt: daysAgo(1), updatedAt: daysAgo(1),
@@ -1558,32 +1579,39 @@ export function seed() {
     enabled: true,
     derivedFromAutomationId: null,
     originCaseId: null,
-    ownerName: "Iris Burgos",
+    ownerName: "Iris Burgos", ownerUserId: null,
     createdAt: daysAgo(20),
     createdByName: "Iris Burgos",
     updatedAt: daysAgo(20),
     lastModifiedByName: "Iris Burgos",
   });
 
+  // Stable user ids for every owner/author name above (the same strict
+  // mapping the v2 migration uses — it throws rather than guess).
+  assignOwnershipIds(store);
+
   store.meta.schemaVersion = CURRENT_SCHEMA_VERSION;
   persist();
 }
 
-// ── Team members (people who can be @-mentioned) ────────────────────────────
-export const TEAM_MEMBERS = [
-  "Iris Burgos",
-  "Devon Park",
-  "Sara Mitchell",
-];
+// ── Employees who can be picked and @-mentioned ───────────────────────────
+/** Active employees, in id order (RBAC Phase 4: from the users, not a list). */
+export function activeEmployees(): User[] {
+  return store.users.filter((u) => u.active).sort((a, b) => a.id - b.id);
+}
 
-// Find an existing 1:1 DM containing exactly these two members, or create one.
-export function findOrCreateDm(a: string, b: string): Conversation {
+export function userById(id: number | null | undefined): User | undefined {
+  return id == null ? undefined : store.users.find((u) => u.id === id);
+}
+
+// Find an existing 1:1 DM between exactly these two employees, or create one.
+export function findOrCreateDm(a: User, b: User): Conversation {
   const existing = store.conversations.find(
     (c) =>
       c.type === "dm" &&
-      c.members.length === 2 &&
-      c.members.includes(a) &&
-      c.members.includes(b),
+      c.memberUserIds.length === 2 &&
+      c.memberUserIds.includes(a.id) &&
+      c.memberUserIds.includes(b.id),
   );
   if (existing) return existing;
   const created: Conversation = {
@@ -1591,29 +1619,40 @@ export function findOrCreateDm(a: string, b: string): Conversation {
     name: null,
     type: "dm",
     createdAt: new Date().toISOString(),
-    members: [a, b],
+    members: [a.name, b.name],
+    memberUserIds: [a.id, b.id],
   };
   store.conversations.push(created);
   return created;
 }
 
-// Parse @mentions out of a body string. Matches both first-name and full-name
-// forms (case-insensitive). Excludes the author from the results.
-export function parseMentions(body: string, author: string): string[] {
-  const found = new Set<string>();
-  for (const member of TEAM_MEMBERS) {
-    if (member === author) continue;
-    const forms = [member, member.split(" ")[0]];
+/**
+ * The active employees @-mentioned in a body, by full name or — when no other
+ * active employee shares it — first name (case-insensitive). Excludes the
+ * author (by id).
+ */
+export function parseMentions(body: string, authorUserId: number): User[] {
+  const people = activeEmployees();
+  const firstNameCount = new Map<string, number>();
+  for (const u of people) {
+    const first = u.name.split(" ")[0].toLowerCase();
+    firstNameCount.set(first, (firstNameCount.get(first) ?? 0) + 1);
+  }
+  const found: User[] = [];
+  for (const u of people) {
+    if (u.id === authorUserId) continue;
+    const first = u.name.split(" ")[0];
+    const forms = firstNameCount.get(first.toLowerCase()) === 1 ? [u.name, first] : [u.name];
     for (const form of forms) {
       const escaped = form.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
       const re = new RegExp(`@${escaped}(?![A-Za-z0-9])`, "i");
       if (re.test(body)) {
-        found.add(member);
+        found.push(u);
         break;
       }
     }
   }
-  return Array.from(found);
+  return found;
 }
 
 // Build the case-number objects expected by the API for caseTags.

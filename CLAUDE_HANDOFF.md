@@ -7,7 +7,8 @@ file in the same change.
 **Last synchronized with the code:** 2026-09-23, at commit `2e07101`
 (documentation-only update on top of it), then updated for **RBAC Phase 1 —
 identity foundation** (and its browser-login fix) and **RBAC Phase 2 —
-permission core** and **RBAC Phase 3 — backend enforcement**. Typecheck clean; **485 tests across 36 files**, all passing. Default branch `main`, pushed to the private
+permission core**, **RBAC Phase 3 — backend enforcement** and **RBAC Phase 4 —
+stable ownership ids and real team scope**. Typecheck clean; **515 tests across 39 files**, all passing. Default branch `main`, pushed to the private
 remote `inaris-pr/cases-crm`.
 
 ---
@@ -40,6 +41,7 @@ Since recovery (all 2026-09-22/23, see CHANGELOG.md):
 | RBAC Phase 2 | Permission core: `lib/access` (catalog, scopes, bundles, Account field rules, navigation metadata); `/api/auth/me` reports permissions (§2 Permissions) |
 | Login landing fix | Every sign-in lands on the Dashboard; sign-out leaves the protected URL (`cases/src/lib/session.ts`) |
 | RBAC Phase 3 | Backend enforcement: a guard on every route, record scope, Account redaction and field groups, case/lead response shaping, private messages and mentions (§2 Enforcement) |
+| RBAC Phase 4 | Stable owner/author ids (store v2 migration), real team scope from stored teams, reassignment endpoints (§2 Ownership) |
 
 ---
 
@@ -80,8 +82,9 @@ repaired from the highest id present (and `caseNumber` from the highest
 means adding one line to `COLLECTION_SEQ`.
 
 **Versioned migrations** (`src/migrations.ts`, from RBAC Phase 1): the store
-records `meta.schemaVersion` (currently 1). When `store.json` is behind,
-startup copies it byte-for-byte to
+records `meta.schemaVersion` (currently 2). When `store.json` is behind,
+startup first DRY-RUNS the pending steps on a copy (a failing step stops
+startup before anything is backed up or written), then copies it byte-for-byte to
 `data/backups/store.pre-v<N>.from-v<M>.<timestamp>.json` (exclusive create,
 never overwriting), re-reads the copy and compares SHA-256 with the source,
 checks the source did not change meanwhile, runs the ordered idempotent steps
@@ -90,6 +93,9 @@ throws `MigrationAbortError` and startup stops with `store.json` untouched. A
 `store.json` that exists but is not valid JSON also stops startup rather than
 being replaced by the seed. Step v1 (identity foundation) hashes passwords,
 maps legacy roles, adds user flags, and adds the demo employees and teams.
+Step v2 (ownership ids, Phase 4) adds the id next to every employee display
+name listed in `OWNERSHIP_FIELDS` by exact name match, and refuses the
+whole migration if any name matches no employee or more than one.
 
 Seed contents (verified by running `seed()`): 17 accounts, 21 contacts,
 23 account–contact links, 8 leads, 15 cases, 65 tasks, 12 documents,
@@ -183,19 +189,15 @@ Phase 3 (below) enforces them.
   `403 { error: "forbidden", permission }`. `test/route-guards.test.ts`
   walks the router (deny by default), compares every declaration with a
   reviewed table, and runs every route as every role.
-- **Principal** — `principalOf(req)`: the session's employee and their
-  effective permissions.
-- **Scope** — `canOn(p, permission, ownerName)` / `rowsInScope`; ownership is
-  resolved only in `ownerUserFor` (unique display-name match now; stored
-  ids in Phase 4). own = mine; all = everything. **team = mine only, as a
-  temporary Phase 3 safety restriction**: ownership is still a display
-  name, so a team-scoped permission does not reach another employee's
-  record yet. The matrix is unchanged (`/auth/me` still reports `team` for
-  supervisors); Phase 4 adds stable owner ids and makes team scope cover
-  the members of teams the caller supervises (`TEAM_SCOPE_COVERS_MEMBERS`
-  in `authorize.ts`). Effect today: CSR Supervisor edits only her own cases
-  (view/work stay company-wide), BA Supervisor sees only her own leads,
-  Admin Supervisor's team reassignment reaches only her own records.
+- **Principal** — `principalOf(req)`: the session's employee, their
+  effective permissions, and the ids of the members of every team they
+  currently supervise (`supervisedMemberIds`, read from `store.teams`).
+- **Scope** — `canOn(p, permission, ownerUserId)` / `rowsInScope`, by stable
+  employee id only (Phase 4). own = records I own; team = own + records
+  owned by members of teams I supervise (a deactivated member's records
+  stay in scope so they can be reassigned; being a *member* gives nothing
+  over teammates; department or role alone gives nothing); all =
+  everything. A record without an owner id is reachable only with all.
 - **Outcomes** — list routes filter; a record outside *view* scope is `404`;
   visible but outside the action's scope is `403 out_of_scope` (e.g. a CSR
   editing a colleague's case — they may still log calls/comments on it,
@@ -207,22 +209,36 @@ In `routes.ts`:
   IDs, banking message and cart URL null, `redactedFields` listed) in
   `/accounts`, `/accounts/:id`, case embeds, client embeds and the
   conversion response. `POST`/`PATCH /accounts` check each field's group
-  (`accountFieldWritePermissions`) in scope; `ownerName` needs
-  `accounts.assign` for both the current and the new owner.
+  (`accountFieldWritePermissions`) in scope.
 - Without `cases.view` no case data anywhere (no `cases`, `caseCount`,
   `openCaseCount`; message case tags filtered; mentions from unviewable
   cases left out). `/stats` needs `metrics.cases` and is clamped to its scope.
-- Leads: `leads.view` own/team/all; `ownerName` changes need `leads.assign`
-  (both owners in scope); conversion with a first Case needs `cases.create`
-  or the whole request is refused (B4).
+- Leads: `leads.view` own/team/all; conversion with a first Case needs
+  `cases.create` or the whole request is refused (B4).
+- **Reassignment** (Phase 4): `PUT /api/{cases|leads|accounts|contacts}/:id/owner`
+  `{ ownerUserId }` (strict body — no names). Needs `<type>.assign`; record
+  visible (else 404); current owner in assign scope (`403 out_of_scope`);
+  target must exist (`400 unknown_user`), be active (`400 inactive_user`),
+  hold `<type>.view` (`400 target_cannot_own`) and be in assign scope
+  (`403 target_out_of_scope`). Sets `ownerUserId` and the `ownerName` label.
+  `ownerName` in a PATCH → `400 owner_change_requires_reassign`.
 - Case automations follow the case owner (`automations.edit`); globals need
   `automations.manage_global`.
 - Messages: read/post/delete only as a member (`404` otherwise); a creator
   must be in the members; `/mentions` is your own inbox only.
+- **Identity by id** (Phase 4): authors, callers, senders, mention
+  recipients and conversation members are stored by id (plus the display
+  name as written, never rewritten). Conversations are created from
+  `memberUserIds` or exact active-employee names; `@mentions` resolve to
+  active employees who may view the case; `/api/team` lists active
+  employees; `/stats` and `/cases` accept `assigneeUserId` (a name
+  filter is resolved to exactly one employee).
 - **Not yet**: the web app is not role-aware (Phase 5), so a role sees
-  sidebar items and pages whose API calls now fail; `mailingAddress` change
-  auditing waits for an audit log; reassignment endpoints and id-based
-  ownership are Phase 4.
+  sidebar items and pages whose API calls now fail, and the Account page's
+  owner field (which PATCHes `ownerName`) now shows an error until Phase 5
+  adds a reassign control; `mailingAddress` change auditing waits for an
+  audit log; Account/Automation `createdByName`/`lastModifiedByName` stay
+  name-only audit stamps.
 
 ### Domain model
 
@@ -443,8 +459,10 @@ alias for `accountId`.
 
 ### Test coverage
 
-`pnpm test`: Vitest + Supertest, **36 files / 485 tests** in
-`artifacts/api-server/test/`. Covers authorization (every route declared,
+`pnpm test`: Vitest + Supertest, **39 files / 515 tests** in
+`artifacts/api-server/test/`. Covers stable ownership (v2 migration,
+refusal on unmapped/ambiguous names, rename safety, spoofing, history),
+team scope and reassignment, authorization (every route declared,
 role × route for every role, record scope, redaction, forbidden fields,
 case/lead isolation, messages, mentions, B4), the permission core (the approved
 matrix cell by cell, resolver, Account field groups and redaction, navigation
@@ -549,11 +567,11 @@ Unrouted and imported by nothing: `pages/Customers.tsx` (still links to
 
 - **JSON-file store**: single process, whole-file rewrites, no transactions,
   no concurrent-user safety.
-- **Authentication exists, authorization does not yet**: any signed-in
-  employee can call any endpoint (RBAC Phases 2–3).
-- **Ownership is still by display name** (`ownerName`, `authorName`, …);
-  stable user ids arrive in Phase 4. `TEAM_MEMBERS` (owner pickers, mention
-  parsing) still lists only Iris, Devon and Sara.
+- **Authorization is enforced by the API** (RBAC Phases 3–4), but the web
+  app is not role-aware yet (Phase 5).
+- **Ownership is by stable employee id** (Phase 4); display names are
+  labels. There is no rename feature yet — a future one should also refresh
+  the denormalized `ownerName` labels (history names stay as written).
 - **Demo credentials**: every employee uses `test123`; the login page lists
   them in development builds. Sessions and login throttling are in-process.
 - **Not production-grade**: no SSO/MFA, no password change or reset UI, no
@@ -593,9 +611,11 @@ Unrouted and imported by nothing: `pages/Customers.tsx` (still links to
 
 **In progress: role-based access** — see `role-based-access-plan.md`
 (Revision 1) in the Project. Phase 1 (identity foundation), Phase 2
-(permission core, `lib/access`) and Phase 3 (backend enforcement) are done; next are
-Phase 4 (stable user ids, teams, reassignment) and Phase 5 (frontend
-navigation and gating). Personalized dashboards follow only after those.
+(permission core, `lib/access`), Phase 3 (backend enforcement) and Phase 4
+(stable ownership ids, team scope, reassignment) are done; next is
+Phase 5 (frontend navigation and gating — requirements and decisions in
+`phase5-frontend-visibility.md` in the Project, including a Playwright RBAC
+suite in CI). Personalized dashboards follow only after those.
 
 1. **CI** — `pnpm install --frozen-lockfile && pnpm typecheck && pnpm test`
    on push.

@@ -101,7 +101,7 @@ arrives with the role-based access phases.
 | `pnpm dev:api` | API only |
 | `pnpm dev:web` | Frontend only |
 | `pnpm typecheck` | TypeScript across the workspace — currently clean |
-| `pnpm test` | Test suite (Vitest + Supertest) — 485 tests in 36 files |
+| `pnpm test` | Test suite (Vitest + Supertest) — 515 tests in 39 files |
 | `pnpm build` | Production builds for everything |
 | `pnpm api:generate` | Orval regen — **don't**, the spec it reads is stale |
 
@@ -166,3 +166,6 @@ configuration change. Rewrite the schema first.
   by role). The web app does not adapt its navigation to roles yet, so a page
   the role may not use shows an error instead of being hidden — that is the
   next phase of the role-based access plan.
+- Record owners are employees by id. Changing an owner goes through
+  `PUT /api/<records>/:id/owner` with `{ ownerUserId }`; the Account page's
+  owner field cannot change the owner until the next phase adds that control.

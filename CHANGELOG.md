@@ -10,7 +10,37 @@ recovered working tree — the project had no repository, so there is no history
 ## [Unreleased]
 
 Everything since the recovery release, 2026-09-22 → 2026-09-24.
-State at the end of this section: typecheck clean, **485 tests in 36 files**.
+State at the end of this section: typecheck clean, **515 tests in 39 files**.
+
+### Security — RBAC Phase 4: stable ownership ids and real team scope (2026-09-24)
+- **Ownership and authorship are stable employee ids.** New fields:
+  `ownerUserId` (cases, leads, accounts, contacts, automations), `byUserId`
+  (call logs), `authorUserId` (comments), `senderUserId` (messages),
+  `fromUserId`/`toUserId` (mentions), `memberUserIds` (conversations).
+  Every authorization decision uses them; display names are labels, and
+  historical names are never rewritten. Renaming an employee changes no
+  ownership, authorship or access.
+- **Store migration v1 → v2** maps each name to exactly one employee.
+  The steps are dry-run on a copy first; any name matching no employee or
+  several stops the migration with nothing backed up or written. Backup,
+  SHA-256 verification and atomic write as before.
+- **Real team scope**: a team-scoped permission covers the caller's own
+  records plus those owned by members of the teams they currently
+  supervise (stored teams, re-read on every request). This replaces the
+  temporary Phase 3 own-only rule; the permission matrix is unchanged.
+- **Reassignment**: `PUT /api/{cases|leads|accounts|contacts}/:id/owner`
+  with `{ ownerUserId }` — target must exist, be active, be able to view
+  that record type, and be inside the caller's assign scope (team never
+  crosses teams). `ownerName` in PATCH bodies is now refused
+  (`owner_change_requires_reassign`); the Account page's owner field shows
+  that error until Phase 5 adds a reassign control.
+- `@mentions` resolve against active employees and notify only those who
+  may view the case; `/api/team` lists active employees; conversations
+  take `memberUserIds` (or exact names); `/stats` and `/cases` accept
+  `assigneeUserId`.
+- Tests: `ownership-migration.test.ts`, `team-scope.test.ts`,
+  `ownership-identity.test.ts`; Phase 1 migration tests pinned to their v1
+  step; Phase 3 tests updated where ownership now changes by id.
 
 ### Changed — team scope is own-only until Phase 4 (2026-09-24)
 - **Temporary Phase 3 safety restriction.** A permission held with scope

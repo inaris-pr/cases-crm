@@ -55,8 +55,11 @@ describe("GET /api/stats — dashboard and insights", () => {
 });
 
 describe("GET /api/team", () => {
-  it("lists the mentionable teammates", async () => {
+  it("lists the mentionable teammates: every active employee (Phase 4)", async () => {
     const { body } = await request(app).get("/api/team").expect(200);
-    expect(body).toEqual(["Iris Burgos", "Devon Park", "Sara Mitchell"]);
+    expect(body).toEqual([
+      "Iris Burgos", "Devon Park", "Sara Mitchell", "Nadia Flores", "Leo Martinez",
+      "Grace Kim", "Omar Haddad", "Rachel Stein", "Tessa Nguyen",
+    ]);
   });
 });

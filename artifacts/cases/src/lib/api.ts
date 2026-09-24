@@ -79,6 +79,8 @@ export interface Account {
   oldStripeIds: string | null;
   formationStatus: string | null;
   ownerName: string;
+  /** The owning employee (authoritative since RBAC Phase 4); ownerName is a label. */
+  ownerUserId?: number | null;
   archived: boolean;
   parentAccountId: number | null;
   companyPhone: string | null;
@@ -136,6 +138,7 @@ export interface Contact {
   phone: string | null;
   title: string | null;
   ownerName: string;
+  ownerUserId?: number | null;
   createdAt: string;
 }
 
@@ -192,6 +195,7 @@ export interface Lead {
   status: LeadStatus;
   notes: string | null;
   ownerName: string;
+  ownerUserId?: number | null;
   estimatedValue: number | null;
   convertedAt: string | null;
   convertedAccountId: number | null;
@@ -214,6 +218,7 @@ export interface Case {
   description: string | null;
   tags: string[];
   ownerName: string;
+  ownerUserId?: number | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -292,6 +297,8 @@ export interface Conversation {
   type: ConversationType;
   createdAt: string;
   members: string[];
+  /** Members by employee id (authoritative); `members` are display names. */
+  memberUserIds?: number[];
   lastMessage?: string | null;
   lastMessageAt?: string | null;
 }
@@ -322,6 +329,7 @@ export interface Message {
   id: number;
   conversationId: number;
   senderName: string;
+  senderUserId?: number | null;
   content: string;
   createdAt: string;
   deletedAt: string | null;
@@ -339,6 +347,7 @@ export interface CaseInteraction {
   summary: string;
   contact: string;
   byName: string;
+  byUserId?: number | null;
   createdAt: string;
 }
 
@@ -349,6 +358,7 @@ export interface CaseThreadEntry {
   id: number;
   caseId: number;
   authorName: string;
+  authorUserId?: number | null;
   body: string;
   createdAt: string;
 }
@@ -398,6 +408,7 @@ export interface Automation {
   derivedFromAutomationId: number | null;
   originCaseId: number | null;
   ownerName: string;
+  ownerUserId?: number | null;
   createdAt: string;
   createdByName: string | null;
   updatedAt: string;
@@ -426,6 +437,8 @@ export interface Mention {
   caseId: number;
   fromName: string;
   toName: string;
+  fromUserId?: number | null;
+  toUserId?: number | null;
   body: string;
   readAt: string | null;
   createdAt: string;

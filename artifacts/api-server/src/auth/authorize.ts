@@ -9,15 +9,13 @@
  * - Scoped permissions (own / team / all) are checked per record: a record
  *   the caller may not see is `404` (its existence is not revealed); a record
  *   they may see but not act on is `403 { error: "out_of_scope", permission }`.
- * - Ownership is resolved in ONE place, `ownerUserFor`: by display name now,
- *   by stored user id from Phase 4.
- * - TEMPORARY (Phase 3 safety restriction): a permission held with scope
- *   "team" authorizes only the caller's OWN records until Phase 4. Record
- *   ownership is still a display name, and cross-employee decisions must not
- *   rest on it. The permission matrix is unchanged — supervisors still
- *   RESOLVE "team" (see /api/auth/me) — only this evaluator does not expand
- *   "team" to other employees yet. Phase 4 adds stable owner user ids and
- *   turns on real team ownership here (TEAM_SCOPE_COVERS_MEMBERS).
+ * - Ownership is a stable user id (`ownerUserId`, RBAC Phase 4) — never a
+ *   display name. Renaming an employee changes nothing here.
+ * - Scope: "own" = records the caller owns; "team" = own + records owned by
+ *   the members of every team the caller supervises, from the CURRENT stored
+ *   team relationships (never from departments, role names or names);
+ *   "all" = every record. A record with no owner id is reachable only with
+ *   "all".
  *
  * Permissions come from lib/access (resolvePermissions over the employee's
  * roles). Nothing here trusts the request for identity.
@@ -41,6 +39,18 @@ import { requireAuth } from "./middleware.js";
 export interface Principal {
   user: User;
   permissions: EffectivePermissions;
+  /** Ids of the members of every team this employee currently supervises. */
+  supervisedUserIds: ReadonlySet<number>;
+}
+
+/** Members of the teams `userId` supervises, from the stored teams right now. */
+export function supervisedMemberIds(userId: number): Set<number> {
+  const ids = new Set<number>();
+  for (const team of store.teams) {
+    if (!team.supervisorUserIds.includes(userId)) continue;
+    for (const id of team.memberUserIds) ids.add(id);
+  }
+  return ids;
 }
 
 const principals = new WeakMap<Request, Principal>();
@@ -50,49 +60,39 @@ export function principalOf(req: Request): Principal {
   const cached = principals.get(req);
   if (cached) return cached;
   const { user } = requireAuth(req);
-  const p: Principal = { user, permissions: resolvePermissions(user.roles) };
+  const p: Principal = {
+    user,
+    permissions: resolvePermissions(user.roles),
+    supervisedUserIds: supervisedMemberIds(user.id),
+  };
   principals.set(req, p);
   return p;
 }
 
 // ── Ownership and scope ──────────────────────────────────────────────────────
 
-/**
- * The employee a record's owner/author name refers to, or null when no single
- * employee has that name (unknown names such as integration users, and
- * ambiguous duplicates, match no one). The only place ownership is resolved;
- * Phase 4 replaces the name with a stored user id.
- */
-export function ownerUserFor(ownerName: string | null | undefined): User | null {
-  if (!ownerName) return null;
-  const matches = store.users.filter((u) => u.name === ownerName);
-  return matches.length === 1 ? matches[0] : null;
+/** The employee with this id, if any. The only way ownership is resolved. */
+export function ownerUserFor(ownerUserId: number | null | undefined): User | null {
+  if (ownerUserId == null) return null;
+  return store.users.find((u) => u.id === ownerUserId) ?? null;
 }
 
-/**
- * Whether "team" scope reaches records owned by the members of teams the
- * caller supervises. FALSE until Phase 4 (see the header): team-scoped
- * permissions cover the caller's own records only, because ownership is
- * still stored as a display name. Phase 4 sets this from stable owner ids.
- */
-export const TEAM_SCOPE_COVERS_MEMBERS = false as const;
-
-/** Whether a record owned by `ownerName` falls inside `scope` for `p`. */
-export function ownerInScope(p: Principal, scope: Scope, ownerName: string | null | undefined): boolean {
+/** Whether a record owned by employee `ownerUserId` falls inside `scope` for `p`. */
+export function ownerInScope(p: Principal, scope: Scope, ownerUserId: number | null | undefined): boolean {
   if (scope === "all") return true;
-  // "own", and — until Phase 4 — "team" (team logically includes own).
-  const owner = ownerUserFor(ownerName);
-  return owner !== null && owner.id === p.user.id;
+  if (ownerUserId == null) return false;
+  if (ownerUserId === p.user.id) return true; // own
+  return scope === "team" && p.supervisedUserIds.has(ownerUserId);
 }
 
 /**
- * May `p` use `permission` on a record owned by `ownerName`? Unscoped
- * permissions ignore the owner.
+ * May `p` use `permission` on a record owned by employee `ownerUserId`?
+ * Unscoped permissions ignore the owner.
  */
-export function canOn(p: Principal, permission: Permission, ownerName: string | null | undefined): boolean {
+export function canOn(p: Principal, permission: Permission, ownerUserId: number | null | undefined): boolean {
   if (!isScoped(permission)) return can(p.permissions, permission);
   const scope = scopeOf(p.permissions, permission);
-  return scope !== null && ownerInScope(p, scope, ownerName);
+  return scope !== null && ownerInScope(p, scope, ownerUserId);
 }
 
 /** The rows `p` may use `permission` on. */
@@ -100,7 +100,7 @@ export function rowsInScope<T>(
   p: Principal,
   permission: Permission,
   rows: readonly T[],
-  ownerOf: (row: T) => string | null | undefined,
+  ownerOf: (row: T) => number | null | undefined,
 ): T[] {
   return rows.filter((row) => canOn(p, permission, ownerOf(row)));
 }

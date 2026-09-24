@@ -13,6 +13,10 @@
  *   4. writes the result atomically (temp file + rename), so there is never a
  *      half-written store.
  *
+ * Before step 1 the pending steps are DRY-RUN on a deep copy; if any step
+ * would fail (e.g. an owner name that maps to no employee), nothing is
+ * backed up or written and startup stops with the reasons.
+ *
  * Every step is itself idempotent (it checks before it changes), and the
  * version gate means a migrated file is never touched again. Nothing here
  * imports store.ts, so it can run on any file — which is how the tests drive it.
@@ -31,7 +35,7 @@ import {
   type RoleKey,
 } from "./auth/identity.js";
 
-export const CURRENT_SCHEMA_VERSION = 1;
+export const CURRENT_SCHEMA_VERSION = 2;
 
 export class MigrationAbortError extends Error {
   constructor(message: string) {
@@ -49,8 +53,8 @@ export function schemaVersionOf(data: Data): number {
   return typeof v === "number" && Number.isInteger(v) && v >= 0 ? v : 0;
 }
 
-export function needsMigration(data: Data): boolean {
-  return schemaVersionOf(data) < CURRENT_SCHEMA_VERSION;
+export function needsMigration(data: Data, targetVersion: number = CURRENT_SCHEMA_VERSION): boolean {
+  return schemaVersionOf(data) < targetVersion;
 }
 
 export function sha256(bytes: Buffer | string): string {
@@ -166,11 +170,130 @@ export interface UserMigrationEntry {
 export interface StepReport {
   version: number;
   name: string;
+  /** v1 only (empty for other steps). */
   users: UserMigrationEntry[];
   demoEmployeesAdded: string[];
   demoTeamsAdded: string[];
   missingTeamEmails: string[];
   warnings: string[];
+  /** v2 only: how each display-name field was mapped to a user id. */
+  ownership?: OwnershipReport;
+}
+
+// ── v2: stable user ids for ownership and authorship (RBAC Phase 4) ─────────
+
+/**
+ * Every field that identifies an employee by display name, with the id field
+ * that becomes authoritative. The display name stays as it was (a
+ * denormalized label; historical text is never rewritten).
+ *
+ * Deliberately NOT here: Account/Automation `createdByName` and
+ * `lastModifiedByName` — audit stamps that no authorization reads, and
+ * which can name non-employees (e.g. "Platform Integration User").
+ */
+export const OWNERSHIP_FIELDS = [
+  { collection: "cases", nameField: "ownerName", idField: "ownerUserId" },
+  { collection: "leads", nameField: "ownerName", idField: "ownerUserId" },
+  { collection: "accounts", nameField: "ownerName", idField: "ownerUserId" },
+  { collection: "contacts", nameField: "ownerName", idField: "ownerUserId" },
+  { collection: "automations", nameField: "ownerName", idField: "ownerUserId" },
+  { collection: "caseInteractions", nameField: "byName", idField: "byUserId" },
+  { collection: "threadEntries", nameField: "authorName", idField: "authorUserId" },
+  { collection: "messages", nameField: "senderName", idField: "senderUserId" },
+  { collection: "mentions", nameField: "fromName", idField: "fromUserId" },
+  { collection: "mentions", nameField: "toName", idField: "toUserId" },
+  { collection: "conversations", nameField: "members", idField: "memberUserIds", list: true },
+] as const;
+
+export interface UnmappedName {
+  collection: string;
+  recordId: unknown;
+  field: string;
+  name: unknown;
+  reason: "no_employee" | "ambiguous" | "empty";
+}
+
+export interface OwnershipReport {
+  fields: { collection: string; field: string; idField: string; mapped: number; alreadySet: number }[];
+  unmapped: UnmappedName[];
+}
+
+export class OwnershipMappingError extends Error {
+  constructor(public readonly unmapped: UnmappedName[]) {
+    super(
+      `cannot map ${unmapped.length} display name(s) to exactly one employee: ` +
+        unmapped
+          .map((u) => `${u.collection}#${String(u.recordId)}.${u.field}=${JSON.stringify(u.name)} (${u.reason})`)
+          .join("; "),
+    );
+    this.name = "OwnershipMappingError";
+  }
+}
+
+/**
+ * Adds the stable user-id fields from the display names, by EXACT name match
+ * against the store's employees (active or not). Idempotent: a record whose
+ * id field is already set is left alone. Strict: if any name maps to no
+ * employee, or to more than one, NOTHING is changed and OwnershipMappingError
+ * lists every such name — owners are never guessed.
+ */
+export function assignOwnershipIds(data: Data): OwnershipReport {
+  const users = ensureArray(data, "users");
+  const idsByName = new Map<string, number[]>();
+  for (const u of users) {
+    if (typeof u?.name !== "string" || typeof u?.id !== "number") continue;
+    idsByName.set(u.name, [...(idsByName.get(u.name) ?? []), u.id]);
+  }
+  const resolve = (name: unknown): number | UnmappedName["reason"] => {
+    if (typeof name !== "string" || name.trim() === "") return "empty";
+    const ids = idsByName.get(name) ?? [];
+    return ids.length === 1 ? ids[0] : ids.length === 0 ? "no_employee" : "ambiguous";
+  };
+
+  // Pass 1: resolve everything, change nothing.
+  const unmapped: UnmappedName[] = [];
+  const plan: { row: any; idField: string; value: number | number[]; entry: { mapped: number } }[] = [];
+  const fields: OwnershipReport["fields"] = [];
+  for (const spec of OWNERSHIP_FIELDS) {
+    const entry = { collection: spec.collection, field: spec.nameField, idField: spec.idField, mapped: 0, alreadySet: 0 };
+    fields.push(entry);
+    for (const row of ensureArray(data, spec.collection)) {
+      const isList = "list" in spec && spec.list;
+      const already = isList ? Array.isArray(row[spec.idField]) : typeof row[spec.idField] === "number";
+      if (already) {
+        entry.alreadySet++;
+        continue;
+      }
+      const miss = (name: unknown, reason: UnmappedName["reason"]) =>
+        unmapped.push({ collection: spec.collection, recordId: row?.id, field: spec.nameField, name, reason });
+      if (isList) {
+        const names = Array.isArray(row[spec.nameField]) ? row[spec.nameField] : [];
+        const ids: number[] = [];
+        let ok = true;
+        for (const n of names) {
+          const res = resolve(n);
+          if (typeof res === "number") ids.push(res);
+          else {
+            miss(n, res);
+            ok = false;
+          }
+        }
+        if (ok) plan.push({ row, idField: spec.idField, value: ids, entry });
+      } else {
+        const res = resolve(row[spec.nameField]);
+        if (typeof res === "number") plan.push({ row, idField: spec.idField, value: res, entry });
+        else miss(row[spec.nameField], res);
+      }
+    }
+  }
+  if (unmapped.length) throw new OwnershipMappingError(unmapped);
+
+  // Pass 2: apply.
+  for (const { row, idField, value, entry } of plan) {
+    row[idField] = value;
+    entry.mapped++;
+  }
+  return { fields, unmapped: [] };
 }
 
 interface Step {
@@ -262,6 +385,23 @@ const STEPS: Step[] = [
       };
     },
   },
+  {
+    version: 2,
+    name: "ownership-user-ids",
+    up(data) {
+      const ownership = assignOwnershipIds(data);
+      return {
+        version: 2,
+        name: "ownership-user-ids",
+        users: [],
+        demoEmployeesAdded: [],
+        demoTeamsAdded: [],
+        missingTeamEmails: [],
+        warnings: [],
+        ownership,
+      };
+    },
+  },
 ];
 
 export interface MigrateDataResult {
@@ -270,17 +410,21 @@ export interface MigrateDataResult {
   steps: StepReport[];
 }
 
-/** Runs every pending step on `data` in place. A no-op for a current store. */
+/**
+ * Runs every pending step up to `targetVersion` (default: current) on `data`
+ * in place. A no-op for a store already at that version.
+ */
 export function migrateData(
   data: Data,
-  opts: { now?: Date; hash?: (pw: string) => string } = {},
+  opts: { now?: Date; hash?: (pw: string) => string; targetVersion?: number } = {},
 ): MigrateDataResult {
   const fromVersion = schemaVersionOf(data);
   const nowIso = (opts.now ?? new Date()).toISOString();
   const hash = opts.hash ?? hashPasswordSync;
+  const target = opts.targetVersion ?? CURRENT_SCHEMA_VERSION;
   const steps: StepReport[] = [];
-  for (const step of STEPS) {
-    if (step.version <= schemaVersionOf(data)) continue;
+  for (const step of [...STEPS].sort((a, b) => a.version - b.version)) {
+    if (step.version <= schemaVersionOf(data) || step.version > target) continue;
     steps.push(step.up(data, { nowIso, hash }));
     data.meta = { ...(data.meta && typeof data.meta === "object" ? data.meta : {}), schemaVersion: step.version };
   }
@@ -315,27 +459,52 @@ export interface MigrateFileOptions {
   hash?: (pw: string) => string;
   /** Test seam: how backup bytes are written to the open file descriptor. */
   writeBackup?: (fd: number, bytes: Buffer) => void;
+  /** Migrate only up to this version (tests of earlier steps). Default: current. */
+  targetVersion?: number;
 }
 
 function backupStamp(now: Date): string {
   return now.toISOString().replace(/[:.]/g, "-");
 }
 
-export function backupFileName(fromVersion: number, now: Date): string {
-  return `store.pre-v${CURRENT_SCHEMA_VERSION}.from-v${fromVersion}.${backupStamp(now)}.json`;
+export function backupFileName(fromVersion: number, now: Date, toVersion: number = CURRENT_SCHEMA_VERSION): string {
+  return `store.pre-v${toVersion}.from-v${fromVersion}.${backupStamp(now)}.json`;
+}
+
+/**
+ * Runs the pending steps on a deep copy and reports what they would do,
+ * without touching `data` or any file. Throws MigrationAbortError if a step
+ * would fail.
+ */
+export function dryRunMigration(
+  data: Data,
+  opts: { now?: Date; hash?: (pw: string) => string; targetVersion?: number } = {},
+): MigrateDataResult {
+  try {
+    return migrateData(structuredClone(data), opts);
+  } catch (err: any) {
+    throw new MigrationAbortError(
+      `dry run failed: ${err?.message ?? err}; nothing was backed up or written`,
+    );
+  }
 }
 
 export function migrateStoreFile(opts: MigrateFileOptions): MigrateFileResult {
   const { storeFile, backupDir, sourceBytes, data } = opts;
-  if (!needsMigration(data)) return { status: "current", data };
+  const targetVersion = opts.targetVersion ?? CURRENT_SCHEMA_VERSION;
+  if (!needsMigration(data, targetVersion)) return { status: "current", data };
 
   const now = opts.now ?? new Date();
   const fromVersion = schemaVersionOf(data);
   const sourceSha256 = sha256(sourceBytes);
 
+  // 0. Dry run on a copy: if any step would fail, stop before backing up or
+  //    writing anything.
+  dryRunMigration(data, { now, hash: opts.hash, targetVersion });
+
   // 1. Backup, never overwriting an existing file.
   fs.mkdirSync(backupDir, { recursive: true });
-  const backupPath = path.join(backupDir, backupFileName(fromVersion, now));
+  const backupPath = path.join(backupDir, backupFileName(fromVersion, now, targetVersion));
   let fd: number;
   try {
     fd = fs.openSync(backupPath, "wx");
@@ -368,7 +537,7 @@ export function migrateStoreFile(opts: MigrateFileOptions): MigrateFileResult {
   // 3. Migrate in memory. A throwing step aborts before anything is written.
   let result: MigrateDataResult;
   try {
-    result = migrateData(data, { now, hash: opts.hash });
+    result = migrateData(data, { now, hash: opts.hash, targetVersion });
   } catch (err: any) {
     throw new MigrationAbortError(`migration step failed: ${err?.message ?? err}; store left unchanged`);
   }

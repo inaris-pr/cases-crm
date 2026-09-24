@@ -37,7 +37,7 @@ Run from `cases-app/`. Requires Node ≥20 and pnpm 9.0.0 (`corepack prepare pnp
 | `pnpm dev:api` | API only |
 | `pnpm dev:web` | Frontend only (proxies /api to :3001) |
 | `pnpm typecheck` | tsc --noEmit across the workspace (API src + tests, web, lib/db, lib/access) — **must stay clean** |
-| `pnpm test` | Vitest + Supertest suite (36 files, 485 tests) — **must stay green** |
+| `pnpm test` | Vitest + Supertest suite (39 files, 515 tests) — **must stay green** |
 | `pnpm build` | esbuild bundle for the API, `tsc -b && vite build` for the web |
 | `pnpm api:generate` | Orval regen from the OpenAPI spec — **do not run**; the spec is stale |
 
@@ -108,11 +108,20 @@ it, debounced, after every successful non-GET request.
   outside view scope is `404`; visible but outside the action's scope is
   `403 {error:"out_of_scope"}`; a write touching fields the caller may not
   write is `403 {error:"forbidden_fields", fields}` with nothing saved.
-  Resolve ownership only via `ownerUserFor` / `canOn` (names now, ids in
-  Phase 4). **Temporary until Phase 4:** a permission held with scope
-  `team` authorizes only the caller's OWN records — ownership is still a
-  display name, so no cross-employee decision rests on it. The matrix still
-  resolves `team`; Phase 4 turns on real team ownership with stable ids.
+  Ownership is a stable employee id (Phase 4): `ownerUserId`,
+  `authorUserId`, `byUserId`, `senderUserId`, `toUserId`/`fromUserId`,
+  `memberUserIds`. Pass ids to `canOn` / `rowsInScope`; **never** decide
+  anything from a display name (`ownerName`, `authorName`, … are labels;
+  historical ones are never rewritten). team scope = own + members of the
+  teams the caller supervises, read from `store.teams` per request.
+- **Owners change only through `PUT /api/{cases|leads|accounts|contacts}/:id/owner`
+  `{ ownerUserId }`** (D7: current and target owner inside the caller's
+  `*.assign` scope; target active and able to view that record type). An
+  `ownerName` in a PATCH body is refused (`owner_change_requires_reassign`).
+- **A store change that adds identity fields needs a migration step**
+  (`src/migrations.ts`, `OWNERSHIP_FIELDS`); the step is dry-run on a copy
+  first and refuses — no backup, no write — if any name maps to no
+  employee or to several.
 - **Response shaping**: Accounts go out through `shapeAccount` (R2.2
   redaction + `redactedFields`) wherever they appear; without `cases.view` no
   case data at all (no `cases`, `caseCount`, `openCaseCount`, case tags);
@@ -168,7 +177,7 @@ it, debounced, after every successful non-GET request.
 ## Tests
 
 `pnpm test` from the root, or `pnpm --filter @cases/api-server test`.
-Vitest + Supertest, in `artifacts/api-server/test/` — 36 files, 485 tests.
+Vitest + Supertest, in `artifacts/api-server/test/` — 39 files, 515 tests.
 
 - **Every request needs a session.** `test/helpers/app.ts` logs in through the
   real endpoint: `asMe` is Iris's session cookie, `loginAs(email)` returns

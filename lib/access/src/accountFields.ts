@@ -13,7 +13,7 @@ import { can, type EffectivePermissions } from "./resolve";
 import type { Permission } from "./permissions";
 
 export const ACCOUNT_FIELD_GROUPS = {
-  base: ["id", "ownerName", "archived", "createdAt", "createdByName", "lastModifiedAt", "lastModifiedByName"],
+  base: ["id", "ownerName", "ownerUserId", "archived", "createdAt", "createdByName", "lastModifiedAt", "lastModifiedByName"],
   profile: ["companyPhone", "website", "industry", "principalAddress", "mailingAddress"],
   service: ["brand", "subscriptionBundle", "formationTier", "phoneForwardingPhone", "voPhone"],
   formation: [

@@ -37,20 +37,25 @@ const ACCESS: [string, string, Access][] = [
   ["PATCH", "/accounts/:id", [
     "accounts.edit.profile", "accounts.edit.service", "accounts.edit.formation",
     "accounts.edit.regulatory_ids", "accounts.edit.financial", "accounts.edit.system",
-    "accounts.assign", "accounts.archive",
+    "accounts.archive",
   ]],
   ["GET", "/contacts", ["contacts.view"]],
   ["POST", "/contacts", ["contacts.create"]],
   ["GET", "/contacts/:id", ["contacts.view"]],
-  ["PATCH", "/contacts/:id", ["contacts.edit", "contacts.assign"]],
+  ["PATCH", "/contacts/:id", ["contacts.edit"]],
   ["POST", "/account-contacts", ["contacts.link"]],
   ["PATCH", "/account-contacts/:id", ["contacts.link"]],
   ["DELETE", "/account-contacts/:id", ["contacts.link"]],
   ["GET", "/leads", ["leads.view"]],
   ["POST", "/leads", ["leads.create"]],
-  ["PATCH", "/leads/:id", ["leads.edit", "leads.assign"]],
+  ["PATCH", "/leads/:id", ["leads.edit"]],
   ["POST", "/leads/:id/convert", ["leads.convert"]],
   ["DELETE", "/leads/:id", ["leads.delete"]],
+  // Reassignment by employee id (Phase 4)
+  ["PUT", "/cases/:id/owner", ["cases.assign"]],
+  ["PUT", "/leads/:id/owner", ["leads.assign"]],
+  ["PUT", "/accounts/:id/owner", ["accounts.assign"]],
+  ["PUT", "/contacts/:id/owner", ["contacts.assign"]],
   ["GET", "/tasks", ["cases.view"]],
   ["POST", "/tasks", ["cases.work"]],
   ["PATCH", "/tasks/:id", ["cases.work"]],
@@ -189,6 +194,12 @@ add("POST", "/leads", () => "/leads", () => ({ firstName: "New", lastName: "Lead
 add("PATCH", "/leads/:id", () => `/leads/${fx.lead}`, () => ({ notes: "role test" }));
 add("POST", "/leads/:id/convert", () => `/leads/${fx.lead}/convert`, () => ({ accountName: "Converted LLC", linkRole: "Owner" }));
 add("DELETE", "/leads/:id", () => `/leads/${fx.lead2}`);
+// Reassign to the System Owner (id 1): refused by scope for most roles, but
+// never with the capability error unless the role lacks <type>.assign.
+add("PUT", "/cases/:id/owner", () => "/cases/1/owner", () => ({ ownerUserId: 1 }));
+add("PUT", "/leads/:id/owner", () => `/leads/${fx.lead}/owner`, () => ({ ownerUserId: 1 }));
+add("PUT", "/accounts/:id/owner", () => "/accounts/1/owner", () => ({ ownerUserId: 1 }));
+add("PUT", "/contacts/:id/owner", () => "/contacts/1/owner", () => ({ ownerUserId: 1 }));
 add("GET", "/tasks", () => "/tasks");
 add("POST", "/tasks", () => "/tasks", () => ({ caseId: 1, title: "Role task" }));
 add("PATCH", "/tasks/:id", () => `/tasks/${fx.task}`, () => ({ title: "Renamed" }));
