@@ -246,7 +246,10 @@ export interface User {
   createdAt: string;
 }
 
-/** A group of employees. Groundwork for team scope (Phase 4); no access effect yet. */
+/**
+ * A group of employees. Supervisors' "team" scope covers records owned by the
+ * members of the teams they supervise (RBAC Phase 3, auth/authorize.ts).
+ */
 export interface Team {
   id: number;
   name: string;

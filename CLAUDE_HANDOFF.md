@@ -7,7 +7,7 @@ file in the same change.
 **Last synchronized with the code:** 2026-09-23, at commit `2e07101`
 (documentation-only update on top of it), then updated for **RBAC Phase 1 —
 identity foundation** (and its browser-login fix) and **RBAC Phase 2 —
-permission core**. Typecheck clean; **432 tests across 34 files**, all passing. Default branch `main`, pushed to the private
+permission core** and **RBAC Phase 3 — backend enforcement**. Typecheck clean; **480 tests across 36 files**, all passing. Default branch `main`, pushed to the private
 remote `inaris-pr/cases-crm`.
 
 ---
@@ -38,6 +38,8 @@ Since recovery (all 2026-09-22/23, see CHANGELOG.md):
 | `5f78e5e` | GitHub Actions CI (typecheck + tests on push/PR to `main`) |
 | RBAC Phase 1 | Identity foundation: hashed passwords, sessions, auth on every route, roles/teams stored, store migration (§2 Authentication) |
 | RBAC Phase 2 | Permission core: `lib/access` (catalog, scopes, bundles, Account field rules, navigation metadata); `/api/auth/me` reports permissions (§2 Permissions) |
+| Login landing fix | Every sign-in lands on the Dashboard; sign-out leaves the protected URL (`cases/src/lib/session.ts`) |
+| RBAC Phase 3 | Backend enforcement: a guard on every route, record scope, Account redaction and field groups, case/lead response shaping, private messages and mentions (§2 Enforcement) |
 
 ---
 
@@ -137,8 +139,7 @@ automations (normalizeLoaded adds the empty collection; the seed does not run).
 - **Frontend**: `AuthProvider` asks `/api/auth/me`; nothing identity-related
   is kept in `localStorage`; any `401` returns to the login screen; logout
   ends the server session and clears cached data.
-- **Not yet**: roles do not restrict anything — every signed-in employee can
-  still use every endpoint (Phase 3).
+- Roles are enforced by the API from Phase 3 (below).
 
 ### Permissions (RBAC Phase 2)
 
@@ -172,8 +173,49 @@ The API re-exports it from `src/access.ts` (relative import, bundled by
 esbuild); `/api/auth/me` adds `permissions`. The web app imports only its
 types (`@cases/access` tsconfig path) and keeps `permissions` in
 `AuthProvider`, unused until Phase 5. **Nothing is enforced yet**:
-`access-auth-me.test.ts` asserts a CSR can still `GET /api/leads` — Phase 3
-flips that on purpose.
+Phase 3 (below) enforces them.
+
+### Enforcement (RBAC Phase 3)
+
+`src/auth/authorize.ts`:
+- **Guards** — every route's first handler is `publicRoute` (login, logout),
+  `signedIn` (`/auth/me`) or `allow(...permissions)` (any of). Missing →
+  `403 { error: "forbidden", permission }`. `test/route-guards.test.ts`
+  walks the router (deny by default), compares every declaration with a
+  reviewed table, and runs every route as every role.
+- **Principal** — `principalOf(req)`: the session's employee, their
+  effective permissions, and the members of teams they supervise.
+- **Scope** — `canOn(p, permission, ownerName)` / `rowsInScope`; ownership is
+  resolved only in `ownerUserFor` (unique display-name match now; stored
+  ids in Phase 4). own = mine; team = mine + members of teams I supervise
+  (live from the stored teams); all = everything.
+- **Outcomes** — list routes filter; a record outside *view* scope is `404`;
+  visible but outside the action's scope is `403 out_of_scope` (e.g. a CSR
+  editing a colleague's case — they may still log calls/comments on it,
+  `cases.work` is company-wide); field-level refusals are
+  `403 { error: "forbidden_fields", fields }`, all or nothing.
+
+In `routes.ts`:
+- Accounts: `shapeAccount` redacts per R2.2 (EIN/FinCEN masked, Stripe/banking
+  IDs, banking message and cart URL null, `redactedFields` listed) in
+  `/accounts`, `/accounts/:id`, case embeds, client embeds and the
+  conversion response. `POST`/`PATCH /accounts` check each field's group
+  (`accountFieldWritePermissions`) in scope; `ownerName` needs
+  `accounts.assign` for both the current and the new owner.
+- Without `cases.view` no case data anywhere (no `cases`, `caseCount`,
+  `openCaseCount`; message case tags filtered; mentions from unviewable
+  cases left out). `/stats` needs `metrics.cases` and is clamped to its scope.
+- Leads: `leads.view` own/team/all; `ownerName` changes need `leads.assign`
+  (both owners in scope); conversion with a first Case needs `cases.create`
+  or the whole request is refused (B4).
+- Case automations follow the case owner (`automations.edit`); globals need
+  `automations.manage_global`.
+- Messages: read/post/delete only as a member (`404` otherwise); a creator
+  must be in the members; `/mentions` is your own inbox only.
+- **Not yet**: the web app is not role-aware (Phase 5), so a role sees
+  sidebar items and pages whose API calls now fail; `mailingAddress` change
+  auditing waits for an audit log; reassignment endpoints and id-based
+  ownership are Phase 4.
 
 ### Domain model
 
@@ -394,8 +436,10 @@ alias for `accountId`.
 
 ### Test coverage
 
-`pnpm test`: Vitest + Supertest, **34 files / 432 tests** in
-`artifacts/api-server/test/`. Covers the permission core (the approved
+`pnpm test`: Vitest + Supertest, **36 files / 480 tests** in
+`artifacts/api-server/test/`. Covers authorization (every route declared,
+role × route for every role, record scope, redaction, forbidden fields,
+case/lead isolation, messages, mentions, B4), the permission core (the approved
 matrix cell by cell, resolver, Account field groups and redaction, navigation
 and route metadata, `/auth/me` permissions), authentication (passwords, sessions,
 expiry, revocation, throttling, spoofing, same-origin, the 401 on every route),
@@ -541,8 +585,8 @@ Unrouted and imported by nothing: `pages/Customers.tsx` (still links to
 ## 7. Recommended next work
 
 **In progress: role-based access** — see `role-based-access-plan.md`
-(Revision 1) in the Project. Phase 1 (identity foundation) and Phase 2
-(permission core, `lib/access`) are done; next are Phase 3 (backend enforcement),
+(Revision 1) in the Project. Phase 1 (identity foundation), Phase 2
+(permission core, `lib/access`) and Phase 3 (backend enforcement) are done; next are
 Phase 4 (stable user ids, teams, reassignment) and Phase 5 (frontend
 navigation and gating). Personalized dashboards follow only after those.
 

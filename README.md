@@ -101,7 +101,7 @@ arrives with the role-based access phases.
 | `pnpm dev:api` | API only |
 | `pnpm dev:web` | Frontend only |
 | `pnpm typecheck` | TypeScript across the workspace — currently clean |
-| `pnpm test` | Test suite (Vitest + Supertest) — 432 tests in 34 files |
+| `pnpm test` | Test suite (Vitest + Supertest) — 480 tests in 36 files |
 | `pnpm build` | Production builds for everything |
 | `pnpm api:generate` | Orval regen — **don't**, the spec it reads is stale |
 
@@ -160,7 +160,9 @@ configuration change. Rewrite the schema first.
   sound local prototype, not production security — see CLAUDE_HANDOFF.md §6.6.
 - On first start after upgrading, an older `store.json` is migrated in place
   after a verified backup to `artifacts/api-server/data/backups/`.
-- Roles and permissions are defined in `lib/access` and reported by
-  `GET /api/auth/me`, but **not enforced yet** — every signed-in employee can
-  still use every endpoint and see every page. Enforcement is the next phase
-  of the role-based access plan.
+- Roles and permissions are defined in `lib/access`, reported by
+  `GET /api/auth/me` and **enforced by the API** (e.g. a CSR gets `403` on
+  every `/api/leads` request; sensitive Account fields are masked or omitted
+  by role). The web app does not adapt its navigation to roles yet, so a page
+  the role may not use shows an error instead of being hidden — that is the
+  next phase of the role-based access plan.

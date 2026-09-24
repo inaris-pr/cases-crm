@@ -4,8 +4,8 @@ import { createTestApp, loginAs } from "./helpers/app";
 import { PERMISSION_KEYS, resolvePermissions } from "../src/access";
 
 /**
- * GET /api/auth/me reports effective permissions (Phase 2). Permissions are
- * NOT enforced by application endpoints until Phase 3.
+ * GET /api/auth/me reports effective permissions (Phase 2); the API enforces
+ * them from Phase 3.
  */
 const app = createTestApp();
 
@@ -76,16 +76,18 @@ describe("GET /api/auth/me permissions", () => {
   });
 });
 
-describe("permissions are not enforced yet (Phase 3 turns this on)", () => {
-  // This documents the approved Phase 2 boundary. When Phase 3 enforces
-  // leads.view, these expectations flip to 403 on purpose.
-  it("a CSR can still list Leads", async () => {
+describe("permissions are enforced (Phase 3)", () => {
+  // Phase 2 documented the boundary here with 200s; Phase 3 flipped them on
+  // purpose. The full role × route table is in route-guards.test.ts.
+  it("a CSR can no longer list Leads", async () => {
     const res = await request(app).get("/api/leads").set(await loginAs("devon@example.com"));
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(403);
+    expect(res.body).toEqual({ error: "forbidden", permission: "leads.view" });
   });
 
-  it("HR can still list cases", async () => {
+  it("HR can no longer list cases", async () => {
     const res = await request(app).get("/api/cases").set(await loginAs("tessa@example.com"));
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(403);
+    expect(res.body).toEqual({ error: "forbidden", permission: "cases.view" });
   });
 });

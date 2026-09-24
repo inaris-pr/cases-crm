@@ -2,7 +2,25 @@ import { Router, type Express, type Request, type Response, type NextFunction } 
 import { z } from "zod";
 import { authenticate, requireAuth, requireSameOrigin } from "./auth/middleware.js";
 import { publicUser } from "./auth/identity.js";
-import { resolvePermissions } from "./access.js";
+import {
+  accountFieldWritePermissions,
+  can,
+  redactAccount,
+  resolvePermissions,
+  type Permission,
+} from "./access.js";
+import {
+  allow,
+  canOn,
+  forbidden,
+  forbiddenFields,
+  outOfScope,
+  principalOf,
+  publicRoute,
+  rowsInScope,
+  signedIn,
+  type Principal,
+} from "./auth/authorize.js";
 import { dummyPasswordHash, verifyPassword } from "./auth/password.js";
 import {
   absoluteTimeoutMs,
@@ -166,15 +184,17 @@ const EMPTY_GRAPH: AutomationGraph = { nodes: [], edges: [], viewport: null };
  * needs its own decision. Tests pinning the current fallback:
  * case-links.test.ts, case-update-validation.test.ts.
  */
-function caseWithRelations(c: Case) {
-  const account = store.accounts.find((a) => a.id === c.accountId) ?? null;
+function caseWithRelations(c: Case, p: Principal) {
+  const rawAccount = store.accounts.find((a) => a.id === c.accountId) ?? null;
+  // The embedded account obeys the viewer's Account rules (scope + R2.2 redaction).
+  const account = rawAccount && canViewAccount(p, rawAccount) ? shapeAccount(p, rawAccount) : null;
   const primaryContact =
     (c.primaryContactId
       ? store.contacts.find((p) => p.id === c.primaryContactId)
       : null) ??
     (account ? primaryContactForAccount(account.id) : null) ??
     null;
-  const customer = account
+  const customer = account && rawAccount
     ? {
         id: account.id, // legacy: use account id as the customer id
         name: primaryContact ? contactFullName(primaryContact) : account.name,
@@ -198,12 +218,81 @@ function currentUser(req: Request): string {
   return requireAuth(req).user.name;
 }
 
-function findCaseFor(_req: Request, id: number): Case | undefined {
-  return store.cases.find((x) => x.id === id);
+// ── Access helpers (RBAC Phase 3) ────────────────────────────────────────────
+// Record-level rules on top of the route guards (auth/authorize.ts). A record
+// outside the caller's view scope is treated exactly like a missing one.
+
+function canViewCase(p: Principal, c: Case): boolean {
+  return canOn(p, "cases.view", c.ownerName);
+}
+function canViewAccount(p: Principal, a: Account): boolean {
+  return canOn(p, "accounts.view", a.ownerName);
+}
+function canViewContact(p: Principal, c: Contact): boolean {
+  return canOn(p, "contacts.view", c.ownerName);
+}
+function canViewLead(p: Principal, l: Lead): boolean {
+  return canOn(p, "leads.view", l.ownerName);
+}
+
+/** An Account as this viewer may read it: R2.2 redaction plus `redactedFields`. */
+function shapeAccount<T extends Account>(p: Principal, a: T): T & { redactedFields: string[] } {
+  const { account, redactedFields } = redactAccount(a, p.permissions);
+  return { ...account, redactedFields };
+}
+
+/** The case, if it exists AND the caller may view it; otherwise undefined (→ 404). */
+function findCaseFor(req: Request, id: number): Case | undefined {
+  const c = store.cases.find((x) => x.id === id);
+  return c && canViewCase(principalOf(req), c) ? c : undefined;
+}
+
+/** Cases the caller may view. */
+function viewableCases(p: Principal): Case[] {
+  return rowsInScope(p, "cases.view", store.cases, (c) => c.ownerName);
+}
+
+/**
+ * Which of `fields` the caller may not write on a record owned by
+ * `ownerName`, given each field's required permissions. Scoped permissions
+ * must cover the record's owner; `newOwnerName` (reassignment) must be in
+ * scope too.
+ */
+function writeViolations(
+  p: Principal,
+  ownerName: string | null,
+  fields: readonly string[],
+  permissionsFor: (field: string) => Permission[] | null,
+  newOwnerName?: string,
+): string[] {
+  return fields.filter((field) => {
+    const needed = permissionsFor(field);
+    if (needed === null) return true;
+    return !needed.every(
+      (perm) =>
+        canOn(p, perm, ownerName) &&
+        (field !== "ownerName" || newOwnerName === undefined || canOn(p, perm, newOwnerName)),
+    );
+  });
+}
+
+/** Keys actually present in a parsed body (undefined = not supplied). */
+function suppliedKeys(body: Record<string, unknown>): string[] {
+  return Object.keys(body).filter((k) => body[k] !== undefined);
 }
 
 // ── Routes ───────────────────────────────────────────────────────────────────
 export function registerRoutes(app: Express) {
+  app.use("/api", buildApiRouter());
+}
+
+/**
+ * The /api router. Every route declares its access as its first handler
+ * (`publicRoute`, `signedIn` or `allow(...)`, from auth/authorize.ts);
+ * test/route-guards.test.ts walks this router and fails on any route that
+ * does not.
+ */
+export function buildApiRouter(): Router {
   const r = Router();
 
   r.use((req, res, next) => {
@@ -224,6 +313,7 @@ export function registerRoutes(app: Express) {
   // GET  /api/auth/me      — the signed-in employee (behind authenticate)
   r.post(
     "/auth/login",
+    publicRoute,
     asyncHandler(async (req, res) => {
       const body = z
         .object({ email: z.string().min(3), password: z.string().min(1) })
@@ -266,6 +356,7 @@ export function registerRoutes(app: Express) {
 
   r.post(
     "/auth/logout",
+    publicRoute,
     asyncHandler(async (req, res) => {
       const token = sessionTokenFrom(req);
       if (token) revokeSessionToken(token);
@@ -279,6 +370,7 @@ export function registerRoutes(app: Express) {
 
   r.get(
     "/auth/me",
+    signedIn,
     asyncHandler(async (req, res) => {
       const { user } = requireAuth(req);
       const teams = store.teams
@@ -289,8 +381,8 @@ export function registerRoutes(app: Express) {
           departmentKey: t.departmentKey,
           relation: t.supervisorUserIds.includes(user.id) ? ("supervisor" as const) : ("member" as const),
         }));
-      // Effective permissions from the shared role bundles (lib/access).
-      // Phase 2: reported only — endpoints do not enforce them yet (Phase 3).
+      // Effective permissions from the shared role bundles (lib/access),
+      // enforced by every route below (Phase 3).
       res.json({ user: publicUser(user), teams, permissions: resolvePermissions(user.roles) });
     }),
   );
@@ -298,6 +390,7 @@ export function registerRoutes(app: Express) {
   // ── Cases ──────────────────────────────────────────────────────────────────
   r.get(
     "/cases",
+    allow("cases.view"),
     asyncHandler(async (req, res) => {
       const q = z
         .object({
@@ -310,7 +403,8 @@ export function registerRoutes(app: Express) {
         })
         .parse(req.query);
 
-      let rows = [...store.cases];
+      const p = principalOf(req);
+      let rows = viewableCases(p);
       if (q.assignee) rows = rows.filter((c) => c.ownerName === q.assignee);
       if (q.status) rows = rows.filter((c) => c.status === q.status);
       if (q.priority) rows = rows.filter((c) => c.priority === q.priority);
@@ -345,12 +439,13 @@ export function registerRoutes(app: Express) {
         });
       }
       rows.sort((a, b) => +new Date(b.updatedAt) - +new Date(a.updatedAt));
-      res.json(rows.map(caseWithRelations));
+      res.json(rows.map((c) => caseWithRelations(c, p)));
     }),
   );
 
   r.post(
     "/cases",
+    allow("cases.create"),
     asyncHandler(async (req, res) => {
       const body = z
         .object({
@@ -369,15 +464,17 @@ export function registerRoutes(app: Express) {
       const accountId = body.accountId ?? body.customerId;
       if (!accountId) return res.status(400).json({ error: "missing_account" });
       const me = currentUser(req);
+      const p = principalOf(req);
       const account = store.accounts.find((a) => a.id === accountId);
-      if (!account) return res.status(400).json({ error: "unknown_account" });
+      // An account the caller may not view is reported as unknown.
+      if (!account || !canViewAccount(p, account)) return res.status(400).json({ error: "unknown_account" });
 
       // A case's primary contact must be a real person actively linked to the
       // case's account. Without this check any contact id was accepted, so a
       // case could be filed under one company with a stranger as its contact.
       if (body.primaryContactId !== undefined) {
         const contact = store.contacts.find((c) => c.id === body.primaryContactId);
-        if (!contact) return res.status(400).json({ error: "unknown_contact" });
+        if (!contact || !canViewContact(p, contact)) return res.status(400).json({ error: "unknown_contact" });
         const linked = store.accountContactLinks.some(
           (l) =>
             l.accountId === accountId &&
@@ -405,18 +502,19 @@ export function registerRoutes(app: Express) {
         updatedAt: now,
       };
       store.cases.push(created);
-      res.status(201).json(caseWithRelations(created));
+      res.status(201).json(caseWithRelations(created, p));
     }),
   );
 
   r.get(
     "/cases/:id",
+    allow("cases.view"),
     asyncHandler(async (req, res) => {
       const { id } = idParam.parse(req.params);
       const c = findCaseFor(req, id);
       if (!c) return res.status(404).json({ error: "not_found" });
       res.json({
-        ...caseWithRelations(c),
+        ...caseWithRelations(c, principalOf(req)),
         tasks: store.tasks.filter((t) => t.caseId === id),
         documents: store.documents.filter((d) => d.caseId === id),
       });
@@ -425,6 +523,7 @@ export function registerRoutes(app: Express) {
 
   r.patch(
     "/cases/:id",
+    allow("cases.edit"),
     asyncHandler(async (req, res) => {
       const { id } = idParam.parse(req.params);
       const body = z
@@ -441,6 +540,10 @@ export function registerRoutes(app: Express) {
         .parse(req.body);
       const c = findCaseFor(req, id);
       if (!c) return res.status(404).json({ error: "not_found" });
+      const p = principalOf(req);
+      // Visible but outside the caller's edit scope (e.g. a CSR on a
+      // colleague's case: they may log calls on it, not change it).
+      if (!canOn(p, "cases.edit", c.ownerName)) return outOfScope(res, "cases.edit");
 
       // The same Account/Contact rules as POST /cases, applied to the
       // relationship the case would have AFTER this update. Nothing is
@@ -451,14 +554,17 @@ export function registerRoutes(app: Express) {
       const accountChanged = nextAccountId !== c.accountId;
       const contactChanged = nextContactId !== c.primaryContactId;
 
-      if (body.accountId !== undefined && !store.accounts.some((a) => a.id === body.accountId)) {
+      if (
+        body.accountId !== undefined &&
+        !store.accounts.some((a) => a.id === body.accountId && canViewAccount(p, a))
+      ) {
         return res.status(400).json({ error: "unknown_account" });
       }
       // Only a changed relationship is re-checked, so partial updates (status,
       // title, …) to an existing case keep working as before.
       if ((accountChanged || contactChanged) && nextContactId !== null) {
-        const contact = store.contacts.find((p) => p.id === nextContactId);
-        if (!contact) return res.status(400).json({ error: "unknown_contact" });
+        const contact = store.contacts.find((x) => x.id === nextContactId);
+        if (!contact || !canViewContact(p, contact)) return res.status(400).json({ error: "unknown_contact" });
         const linked = store.accountContactLinks.some(
           (l) => l.accountId === nextAccountId && l.contactId === nextContactId && !l.endedAt,
         );
@@ -479,30 +585,39 @@ export function registerRoutes(app: Express) {
       }
 
       Object.assign(c, body, { updatedAt: new Date().toISOString() });
-      res.json(caseWithRelations(c));
+      res.json(caseWithRelations(c, p));
     }),
   );
 
   // ── Accounts ───────────────────────────────────────────────────────────────
-  /** Sum of all distinct contacts + cases attached to an account. */
-  function accountWithCounts(a: Account) {
+  /**
+   * An account as this viewer may read it (R2.2 redaction), with its linked
+   * contact count and — only for viewers with cases.view — its case counts.
+   * Without cases.view no case information is sent at all (R5).
+   */
+  function accountWithCounts(a: Account, p: Principal) {
     const contactCount = store.accountContactLinks.filter(
       (l) => l.accountId === a.id && !l.endedAt,
     ).length;
-    const caseCount = store.cases.filter((c) => c.accountId === a.id).length;
-    const openCaseCount = store.cases.filter(
-      (c) => c.accountId === a.id && c.status !== "completed",
-    ).length;
-    return { ...a, contactCount, caseCount, openCaseCount };
+    const shaped = shapeAccount(p, a);
+    if (!can(p.permissions, "cases.view")) return { ...shaped, contactCount };
+    const cases = viewableCases(p).filter((c) => c.accountId === a.id);
+    const caseCount = cases.length;
+    const openCaseCount = cases.filter((c) => c.status !== "completed").length;
+    return { ...shaped, contactCount, caseCount, openCaseCount };
   }
 
   r.get(
     "/accounts",
+    allow("accounts.view"),
     asyncHandler(async (req, res) => {
       const q = z
         .object({ owner: z.string().optional(), search: z.string().optional() })
         .parse(req.query);
-      let rows = [...store.accounts];
+      const p = principalOf(req);
+      // Search matches only name, state and industry — fields every viewer
+      // may read in full (R2.2).
+      let rows = rowsInScope(p, "accounts.view", store.accounts, (a) => a.ownerName);
       if (q.owner) rows = rows.filter((a) => a.ownerName === q.owner);
       if (q.search) {
         const needle = q.search.toLowerCase();
@@ -514,12 +629,13 @@ export function registerRoutes(app: Express) {
         );
       }
       rows.sort((a, b) => a.name.localeCompare(b.name));
-      res.json(rows.map(accountWithCounts));
+      res.json(rows.map((a) => accountWithCounts(a, p)));
     }),
   );
 
   r.post(
     "/accounts",
+    allow("accounts.create"),
     asyncHandler(async (req, res) => {
       const body = z
         .object({
@@ -532,6 +648,11 @@ export function registerRoutes(app: Express) {
         })
         .parse(req.body);
       const me = currentUser(req);
+      const p = principalOf(req);
+      // Every supplied field needs its group's edit permission (R2.3); the
+      // new account is the caller's own, so any scope covers it.
+      const denied = writeViolations(p, me, suppliedKeys(body), accountFieldWritePermissions);
+      if (denied.length) return forbiddenFields(res, denied);
       const now = new Date().toISOString();
       const created: Account = {
         id: nextAccountId(),
@@ -582,29 +703,32 @@ export function registerRoutes(app: Express) {
         lastModifiedByName: me,
       };
       store.accounts.push(created);
-      res.status(201).json(accountWithCounts(created));
+      res.status(201).json(accountWithCounts(created, p));
     }),
   );
 
   r.get(
     "/accounts/:id",
+    allow("accounts.view"),
     asyncHandler(async (req, res) => {
       const { id } = idParam.parse(req.params);
+      const p = principalOf(req);
       const a = store.accounts.find((x) => x.id === id);
-      if (!a) return res.status(404).json({ error: "not_found" });
-      const linkedContacts = contactsForAccount(id).map(({ contact, link }) => ({
-        ...contact,
-        fullName: contactFullName(contact),
-        link,
-      }));
-      const cases = store.cases
+      if (!a || !canViewAccount(p, a)) return res.status(404).json({ error: "not_found" });
+      const linkedContacts = contactsForAccount(id)
+        .filter(({ contact }) => canViewContact(p, contact))
+        .map(({ contact, link }) => ({
+          ...contact,
+          fullName: contactFullName(contact),
+          link,
+        }));
+      const detail = { ...accountWithCounts(a, p), contacts: linkedContacts };
+      // No case data at all without cases.view (R5: Business Advisors).
+      if (!can(p.permissions, "cases.view")) return res.json(detail);
+      const cases = viewableCases(p)
         .filter((c) => c.accountId === id)
         .sort((x, y) => +new Date(y.updatedAt) - +new Date(x.updatedAt));
-      res.json({
-        ...accountWithCounts(a),
-        contacts: linkedContacts,
-        cases,
-      });
+      res.json({ ...detail, cases });
     }),
   );
 
@@ -619,6 +743,16 @@ export function registerRoutes(app: Express) {
 
   r.patch(
     "/accounts/:id",
+    allow(
+      "accounts.edit.profile",
+      "accounts.edit.service",
+      "accounts.edit.formation",
+      "accounts.edit.regulatory_ids",
+      "accounts.edit.financial",
+      "accounts.edit.system",
+      "accounts.assign",
+      "accounts.archive",
+    ),
     asyncHandler(async (req, res) => {
       const { id } = idParam.parse(req.params);
       const body = z
@@ -672,26 +806,43 @@ export function registerRoutes(app: Express) {
           website: z.string().nullable().optional(),
         })
         .parse(req.body);
+      const p = principalOf(req);
       const a = store.accounts.find((x) => x.id === id);
-      if (!a) return res.status(404).json({ error: "not_found" });
+      if (!a || !canViewAccount(p, a)) return res.status(404).json({ error: "not_found" });
+      // R2.3: every touched field needs its group's edit permission, in scope
+      // for this account (and for the new owner on reassignment). Any
+      // violation rejects the whole request — nothing is partially saved.
+      const denied = writeViolations(
+        p,
+        a.ownerName,
+        suppliedKeys(body),
+        accountFieldWritePermissions,
+        body.ownerName,
+      );
+      if (denied.length) return forbiddenFields(res, denied);
       Object.assign(a, body);
       // Always bump last-modified on a PATCH.
       const me = currentUser(req);
       a.lastModifiedAt = new Date().toISOString();
       a.lastModifiedByName = me;
-      res.json(accountWithCounts(a));
+      res.json(accountWithCounts(a, p));
     }),
   );
 
   // ── Contacts ───────────────────────────────────────────────────────────────
-  function contactWithSummary(c: Contact) {
-    const accounts = accountsForContact(c.id);
-    return {
+  /** A contact with its (viewable) accounts and, with cases.view only, open case count. */
+  function contactWithSummary(c: Contact, p: Principal) {
+    const accounts = accountsForContact(c.id).filter(({ account }) => canViewAccount(p, account));
+    const summary = {
       ...c,
       fullName: contactFullName(c),
       accountCount: accounts.length,
       accountNames: accounts.map(({ account }) => account.name),
-      openCaseCount: store.cases.filter(
+    };
+    if (!can(p.permissions, "cases.view")) return summary;
+    return {
+      ...summary,
+      openCaseCount: viewableCases(p).filter(
         (cs) =>
           cs.status !== "completed" &&
           (cs.primaryContactId === c.id ||
@@ -702,6 +853,7 @@ export function registerRoutes(app: Express) {
 
   r.get(
     "/contacts",
+    allow("contacts.view"),
     asyncHandler(async (req, res) => {
       const q = z
         .object({
@@ -710,7 +862,8 @@ export function registerRoutes(app: Express) {
           search: z.string().optional(),
         })
         .parse(req.query);
-      let rows = [...store.contacts];
+      const p = principalOf(req);
+      let rows = rowsInScope(p, "contacts.view", store.contacts, (c) => c.ownerName);
       if (q.owner) rows = rows.filter((c) => c.ownerName === q.owner);
       if (q.accountId) {
         const ids = new Set(
@@ -732,12 +885,13 @@ export function registerRoutes(app: Express) {
       rows.sort((a, b) =>
         contactFullName(a).localeCompare(contactFullName(b)),
       );
-      res.json(rows.map(contactWithSummary));
+      res.json(rows.map((c) => contactWithSummary(c, p)));
     }),
   );
 
   r.post(
     "/contacts",
+    allow("contacts.create"),
     asyncHandler(async (req, res) => {
       const body = z
         .object({
@@ -760,38 +914,41 @@ export function registerRoutes(app: Express) {
         createdAt: new Date().toISOString(),
       };
       store.contacts.push(created);
-      res.status(201).json(contactWithSummary(created));
+      res.status(201).json(contactWithSummary(created, principalOf(req)));
     }),
   );
 
   r.get(
     "/contacts/:id",
+    allow("contacts.view"),
     asyncHandler(async (req, res) => {
       const { id } = idParam.parse(req.params);
+      const p = principalOf(req);
       const c = store.contacts.find((x) => x.id === id);
-      if (!c) return res.status(404).json({ error: "not_found" });
-      const accounts = accountsForContact(id).map(({ account, link }) => ({
-        ...account,
-        link,
-      }));
-      const cases = store.cases
+      if (!c || !canViewContact(p, c)) return res.status(404).json({ error: "not_found" });
+      const accounts = accountsForContact(id)
+        .filter(({ account }) => canViewAccount(p, account))
+        .map(({ account, link }) => ({
+          ...shapeAccount(p, account),
+          link,
+        }));
+      const detail = { ...c, fullName: contactFullName(c), accounts };
+      // No case data at all without cases.view (R5: Business Advisors).
+      if (!can(p.permissions, "cases.view")) return res.json(detail);
+      const cases = viewableCases(p)
         .filter(
           (cs) =>
             cs.primaryContactId === id ||
             accounts.some((a) => a.id === cs.accountId),
         )
         .sort((x, y) => +new Date(y.updatedAt) - +new Date(x.updatedAt));
-      res.json({
-        ...c,
-        fullName: contactFullName(c),
-        accounts,
-        cases,
-      });
+      res.json({ ...detail, cases });
     }),
   );
 
   r.patch(
     "/contacts/:id",
+    allow("contacts.edit", "contacts.assign"),
     asyncHandler(async (req, res) => {
       const { id } = idParam.parse(req.params);
       const body = z
@@ -804,16 +961,35 @@ export function registerRoutes(app: Express) {
           ownerName: z.string().optional(),
         })
         .parse(req.body);
+      const p = principalOf(req);
       const c = store.contacts.find((x) => x.id === id);
-      if (!c) return res.status(404).json({ error: "not_found" });
+      if (!c || !canViewContact(p, c)) return res.status(404).json({ error: "not_found" });
+      // ownerName needs contacts.assign (both owners in scope); every other
+      // field needs contacts.edit in scope. All or nothing.
+      const denied = writeViolations(
+        p,
+        c.ownerName,
+        suppliedKeys(body),
+        (f) => (f === "ownerName" ? ["contacts.assign"] : ["contacts.edit"]),
+        body.ownerName,
+      );
+      if (denied.length) return forbiddenFields(res, denied);
       Object.assign(c, body);
-      res.json(contactWithSummary(c));
+      res.json(contactWithSummary(c, p));
     }),
   );
 
   // ── Account ↔ Contact links ────────────────────────────────────────────────
+  /** A link is visible when both its account and its contact are. */
+  function linkVisible(p: Principal, link: AccountContactLink): boolean {
+    const acct = store.accounts.find((a) => a.id === link.accountId);
+    const person = store.contacts.find((c) => c.id === link.contactId);
+    return !!acct && !!person && canViewAccount(p, acct) && canViewContact(p, person);
+  }
+
   r.post(
     "/account-contacts",
+    allow("contacts.link"),
     asyncHandler(async (req, res) => {
       const body = z
         .object({
@@ -825,9 +1001,13 @@ export function registerRoutes(app: Express) {
           isSignatory: z.boolean().optional(),
         })
         .parse(req.body);
-      if (!store.accounts.find((a) => a.id === body.accountId))
+      const p = principalOf(req);
+      // Records the caller may not view are reported as unknown.
+      const acct = store.accounts.find((a) => a.id === body.accountId);
+      if (!acct || !canViewAccount(p, acct))
         return res.status(400).json({ error: "unknown_account" });
-      if (!store.contacts.find((c) => c.id === body.contactId))
+      const person = store.contacts.find((c) => c.id === body.contactId);
+      if (!person || !canViewContact(p, person))
         return res.status(400).json({ error: "unknown_contact" });
       // If we're marking this as primary, demote any other primary on the same account.
       if (body.isPrimary) {
@@ -853,6 +1033,7 @@ export function registerRoutes(app: Express) {
 
   r.patch(
     "/account-contacts/:id",
+    allow("contacts.link"),
     asyncHandler(async (req, res) => {
       const { id } = idParam.parse(req.params);
       const body = z
@@ -865,7 +1046,7 @@ export function registerRoutes(app: Express) {
         })
         .parse(req.body);
       const link = store.accountContactLinks.find((l) => l.id === id);
-      if (!link) return res.status(404).json({ error: "not_found" });
+      if (!link || !linkVisible(principalOf(req), link)) return res.status(404).json({ error: "not_found" });
       if (body.isPrimary) {
         for (const l of store.accountContactLinks) {
           if (l.accountId === link.accountId && l.id !== link.id && !l.endedAt) l.isPrimary = false;
@@ -878,10 +1059,12 @@ export function registerRoutes(app: Express) {
 
   r.delete(
     "/account-contacts/:id",
+    allow("contacts.link"),
     asyncHandler(async (req, res) => {
       const { id } = idParam.parse(req.params);
       const idx = store.accountContactLinks.findIndex((l) => l.id === id);
-      if (idx === -1) return res.status(404).json({ error: "not_found" });
+      if (idx === -1 || !linkVisible(principalOf(req), store.accountContactLinks[idx]))
+        return res.status(404).json({ error: "not_found" });
       store.accountContactLinks.splice(idx, 1);
       res.status(204).end();
     }),
@@ -890,6 +1073,7 @@ export function registerRoutes(app: Express) {
   // ── Leads ──────────────────────────────────────────────────────────────────
   r.get(
     "/leads",
+    allow("leads.view"),
     asyncHandler(async (req, res) => {
       const q = z
         .object({
@@ -898,7 +1082,7 @@ export function registerRoutes(app: Express) {
           search: z.string().optional(),
         })
         .parse(req.query);
-      let rows = [...store.leads];
+      let rows = rowsInScope(principalOf(req), "leads.view", store.leads, (l) => l.ownerName);
       if (q.owner) rows = rows.filter((l) => l.ownerName === q.owner);
       if (q.status) rows = rows.filter((l) => l.status === q.status);
       if (q.search) {
@@ -917,6 +1101,7 @@ export function registerRoutes(app: Express) {
 
   r.post(
     "/leads",
+    allow("leads.create"),
     asyncHandler(async (req, res) => {
       const body = z
         .object({
@@ -962,6 +1147,7 @@ export function registerRoutes(app: Express) {
 
   r.patch(
     "/leads/:id",
+    allow("leads.edit", "leads.assign"),
     asyncHandler(async (req, res) => {
       const { id } = idParam.parse(req.params);
       const body = z
@@ -980,8 +1166,19 @@ export function registerRoutes(app: Express) {
           estimatedValue: z.number().nullable().optional(),
         })
         .parse(req.body);
+      const p = principalOf(req);
       const l = store.leads.find((x) => x.id === id);
-      if (!l) return res.status(404).json({ error: "not_found" });
+      if (!l || !canViewLead(p, l)) return res.status(404).json({ error: "not_found" });
+      // ownerName needs leads.assign (both owners in scope); every other
+      // field needs leads.edit in scope. All or nothing.
+      const denied = writeViolations(
+        p,
+        l.ownerName,
+        suppliedKeys(body),
+        (f) => (f === "ownerName" ? ["leads.assign"] : ["leads.edit"]),
+        body.ownerName,
+      );
+      if (denied.length) return forbiddenFields(res, denied);
       Object.assign(l, body, { updatedAt: new Date().toISOString() });
       res.json(l);
     }),
@@ -993,6 +1190,7 @@ export function registerRoutes(app: Express) {
    */
   r.post(
     "/leads/:id/convert",
+    allow("leads.convert"),
     asyncHandler(async (req, res) => {
       const { id } = idParam.parse(req.params);
       const body = z
@@ -1009,10 +1207,16 @@ export function registerRoutes(app: Express) {
           initialCasePriority: casePriority.optional(),
         })
         .parse(req.body);
+      const p = principalOf(req);
       const lead = store.leads.find((l) => l.id === id);
-      if (!lead) return res.status(404).json({ error: "not_found" });
+      if (!lead || !canViewLead(p, lead)) return res.status(404).json({ error: "not_found" });
+      if (!canOn(p, "leads.convert", lead.ownerName)) return outOfScope(res, "leads.convert");
       if (lead.convertedAt)
         return res.status(409).json({ error: "already_converted" });
+      // B4: the optional first Case needs cases.create. Refused as a whole —
+      // nothing is created — so the caller can retry without it.
+      if (body.createInitialCase && !can(p.permissions, "cases.create"))
+        return forbidden(res, "cases.create");
 
       const now = new Date().toISOString();
       const me = currentUser(req);
@@ -1090,7 +1294,7 @@ export function registerRoutes(app: Express) {
 
       res.status(201).json({
         lead,
-        account,
+        account: shapeAccount(p, account),
         contact,
         link,
         case: createdCase,
@@ -1100,10 +1304,13 @@ export function registerRoutes(app: Express) {
 
   r.delete(
     "/leads/:id",
+    allow("leads.delete"),
     asyncHandler(async (req, res) => {
       const { id } = idParam.parse(req.params);
+      const p = principalOf(req);
       const idx = store.leads.findIndex((l) => l.id === id);
-      if (idx === -1) return res.status(404).json({ error: "not_found" });
+      if (idx === -1 || !canViewLead(p, store.leads[idx])) return res.status(404).json({ error: "not_found" });
+      if (!canOn(p, "leads.delete", store.leads[idx].ownerName)) return outOfScope(res, "leads.delete");
       store.leads.splice(idx, 1);
       res.status(204).end();
     }),
@@ -1112,9 +1319,11 @@ export function registerRoutes(app: Express) {
   // ── Tasks ──────────────────────────────────────────────────────────────────
   r.get(
     "/tasks",
+    allow("cases.view"),
     asyncHandler(async (req, res) => {
       const q = z.object({ caseId: z.coerce.number().int().optional() }).parse(req.query);
-      let rows = [...store.tasks];
+      const visible = new Set(viewableCases(principalOf(req)).map((c) => c.id));
+      let rows = store.tasks.filter((t) => visible.has(t.caseId));
       if (q.caseId) rows = rows.filter((t) => t.caseId === q.caseId);
       rows.sort((a, b) => {
         const ad = a.dueDate ? +new Date(a.dueDate) : Infinity;
@@ -1127,6 +1336,7 @@ export function registerRoutes(app: Express) {
 
   r.post(
     "/tasks",
+    allow("cases.work"),
     asyncHandler(async (req, res) => {
       const body = z
         .object({
@@ -1137,8 +1347,9 @@ export function registerRoutes(app: Express) {
           dueDate: z.string().datetime().optional(),
         })
         .parse(req.body);
-      if (!findCaseFor(req, body.caseId))
-        return res.status(404).json({ error: "case_not_found" });
+      const taskCase = findCaseFor(req, body.caseId);
+      if (!taskCase) return res.status(404).json({ error: "case_not_found" });
+      if (!canOn(principalOf(req), "cases.work", taskCase.ownerName)) return outOfScope(res, "cases.work");
       const created = {
         id: nextTaskId(),
         caseId: body.caseId,
@@ -1155,6 +1366,7 @@ export function registerRoutes(app: Express) {
 
   r.patch(
     "/tasks/:id",
+    allow("cases.work"),
     asyncHandler(async (req, res) => {
       const { id } = idParam.parse(req.params);
       const body = z
@@ -1166,7 +1378,9 @@ export function registerRoutes(app: Express) {
         })
         .parse(req.body);
       const t = store.tasks.find((x) => x.id === id);
-      if (!t) return res.status(404).json({ error: "not_found" });
+      const taskCase = t ? findCaseFor(req, t.caseId) : undefined;
+      if (!t || !taskCase) return res.status(404).json({ error: "not_found" });
+      if (!canOn(principalOf(req), "cases.work", taskCase.ownerName)) return outOfScope(res, "cases.work");
       Object.assign(t, body);
       res.json(t);
     }),
@@ -1175,9 +1389,11 @@ export function registerRoutes(app: Express) {
   // ── Documents ──────────────────────────────────────────────────────────────
   r.get(
     "/documents",
+    allow("cases.view"),
     asyncHandler(async (req, res) => {
       const q = z.object({ caseId: z.coerce.number().int().optional() }).parse(req.query);
-      let rows = [...store.documents];
+      const visible = new Set(viewableCases(principalOf(req)).map((c) => c.id));
+      let rows = store.documents.filter((d) => visible.has(d.caseId));
       if (q.caseId) rows = rows.filter((d) => d.caseId === q.caseId);
       rows.sort((a, b) => +new Date(b.createdAt) - +new Date(a.createdAt));
       res.json(rows);
@@ -1186,6 +1402,7 @@ export function registerRoutes(app: Express) {
 
   r.post(
     "/documents",
+    allow("cases.work"),
     asyncHandler(async (req, res) => {
       const body = z
         .object({
@@ -1197,8 +1414,9 @@ export function registerRoutes(app: Express) {
           tags: z.array(z.string()).optional().default([]),
         })
         .parse(req.body);
-      if (!findCaseFor(req, body.caseId))
-        return res.status(404).json({ error: "case_not_found" });
+      const docCase = findCaseFor(req, body.caseId);
+      if (!docCase) return res.status(404).json({ error: "case_not_found" });
+      if (!canOn(principalOf(req), "cases.work", docCase.ownerName)) return outOfScope(res, "cases.work");
       const created = {
         id: nextDocumentId(),
         caseId: body.caseId,
@@ -1220,6 +1438,7 @@ export function registerRoutes(app: Express) {
 
   r.get(
     "/cases/:id/contacts",
+    allow("cases.view"),
     asyncHandler(async (req, res) => {
       const { id } = idParam.parse(req.params);
       if (!findCaseFor(req, id)) return res.status(404).json({ error: "not_found" });
@@ -1232,6 +1451,7 @@ export function registerRoutes(app: Express) {
 
   r.post(
     "/cases/:id/contacts",
+    allow("cases.work"),
     asyncHandler(async (req, res) => {
       const { id } = idParam.parse(req.params);
       const body = z
@@ -1246,6 +1466,7 @@ export function registerRoutes(app: Express) {
         .parse(req.body);
       const c = findCaseFor(req, id);
       if (!c) return res.status(404).json({ error: "not_found" });
+      if (!canOn(principalOf(req), "cases.work", c.ownerName)) return outOfScope(res, "cases.work");
       const created = {
         id: nextCaseInteractionId(),
         caseId: id,
@@ -1264,6 +1485,7 @@ export function registerRoutes(app: Express) {
   // ── Case Thread Entries ────────────────────────────────────────────────────
   r.get(
     "/cases/:id/thread",
+    allow("cases.view"),
     asyncHandler(async (req, res) => {
       const { id } = idParam.parse(req.params);
       if (!findCaseFor(req, id)) return res.status(404).json({ error: "not_found" });
@@ -1276,6 +1498,7 @@ export function registerRoutes(app: Express) {
 
   r.post(
     "/cases/:id/thread",
+    allow("cases.work"),
     asyncHandler(async (req, res) => {
       const { id } = idParam.parse(req.params);
       const body = z
@@ -1287,6 +1510,7 @@ export function registerRoutes(app: Express) {
         .parse(req.body);
       const c = findCaseFor(req, id);
       if (!c) return res.status(404).json({ error: "not_found" });
+      if (!canOn(principalOf(req), "cases.work", c.ownerName)) return outOfScope(res, "cases.work");
       const author = currentUser(req);
       const created = {
         id: nextThreadEntryId(),
@@ -1316,39 +1540,53 @@ export function registerRoutes(app: Express) {
   );
 
   // ── Mentions inbox ─────────────────────────────────────────────────────────
+  /**
+   * Your own mentions only. `for` is accepted for compatibility but must be
+   * you; asking for anyone else's inbox is refused. A mention from a case you
+   * may not view is left out entirely (its text is case content).
+   */
   r.get(
     "/mentions",
+    allow("messages.use"),
     asyncHandler(async (req, res) => {
       const q = z.object({ for: z.string().optional() }).parse(req.query);
-      let rows = [...store.mentions];
-      if (q.for) rows = rows.filter((m) => m.toName === q.for);
-      rows.sort((a, b) => +new Date(b.createdAt) - +new Date(a.createdAt));
+      const p = principalOf(req);
+      const me = p.user.name;
+      if (q.for !== undefined && q.for !== me) {
+        return res.status(403).json({ error: "not_your_mentions" });
+      }
+      const rows = store.mentions
+        .map((m) => ({ m, c: store.cases.find((x) => x.id === m.caseId) ?? null }))
+        .filter(({ m, c }) => m.toName === me && (c === null || canViewCase(p, c)));
+      rows.sort((a, b) => +new Date(b.m.createdAt) - +new Date(a.m.createdAt));
       res.json(
-        rows.map((m) => {
-          const c = store.cases.find((x) => x.id === m.caseId);
-          return {
-            ...m,
-            caseNumber: c?.caseNumber ?? null,
-            caseTitle: c?.title ?? null,
-          };
-        }),
+        rows.map(({ m, c }) => ({
+          ...m,
+          caseNumber: c?.caseNumber ?? null,
+          caseTitle: c?.title ?? null,
+        })),
       );
     }),
   );
 
   r.patch(
     "/mentions/:id/read",
+    allow("messages.use"),
     asyncHandler(async (req, res) => {
       const { id } = idParam.parse(req.params);
       const m = store.mentions.find((x) => x.id === id);
-      if (!m) return res.status(404).json({ error: "not_found" });
+      // Only your own mentions exist, as far as you can tell.
+      if (!m || m.toName !== currentUser(req)) return res.status(404).json({ error: "not_found" });
       m.readAt = new Date().toISOString();
       res.json(m);
     }),
   );
 
+  // Names for owner pickers and @mention autocomplete (rebuilt from active
+  // employees in Phase 4).
   r.get(
     "/team",
+    allow("messages.use"),
     asyncHandler(async (_req, res) => {
       res.json(TEAM_MEMBERS);
     }),
@@ -1423,6 +1661,38 @@ export function registerRoutes(app: Express) {
     return store.automations.find((a) => a.id === id);
   }
 
+  /** The case a case-scoped automation belongs to (null for globals). */
+  function automationCase(a: Automation): Case | null {
+    return a.caseId === null ? null : store.cases.find((c) => c.id === a.caseId) ?? null;
+  }
+
+  /** Globals are visible to every case viewer; a case automation follows its case. */
+  function automationVisible(p: Principal, a: Automation): boolean {
+    if (a.scope === "global") return true;
+    const c = automationCase(a);
+    return !!c && canViewCase(p, c);
+  }
+
+  /**
+   * May `p` change `a`? Globals need automations.manage_global; a case
+   * automation needs automations.edit in scope for its case's owner (the
+   * permission follows the case). Sends the 403 and returns false if not.
+   */
+  function mayWriteAutomation(p: Principal, a: Automation, res: Response): boolean {
+    if (a.scope === "global") {
+      if (!can(p.permissions, "automations.manage_global")) {
+        forbidden(res, "automations.manage_global");
+        return false;
+      }
+      return true;
+    }
+    if (!canOn(p, "automations.edit", automationCase(a)?.ownerName)) {
+      outOfScope(res, "automations.edit");
+      return false;
+    }
+    return true;
+  }
+
   function touch(a: Automation, me: string) {
     a.updatedAt = new Date().toISOString();
     a.lastModifiedByName = me;
@@ -1433,6 +1703,7 @@ export function registerRoutes(app: Express) {
   /** Everything this case can see, globals first, each group by name. */
   r.get(
     "/cases/:id/automations",
+    allow("cases.view"),
     asyncHandler(async (req, res) => {
       const { id } = idParam.parse(req.params);
       if (!findCaseFor(req, id)) return res.status(404).json({ error: "case_not_found" });
@@ -1455,9 +1726,11 @@ export function registerRoutes(app: Express) {
    */
   r.post(
     "/cases/:id/automations",
+    allow("automations.edit", "automations.manage_global"),
     asyncHandler(async (req, res) => {
       const { id } = idParam.parse(req.params);
-      if (!findCaseFor(req, id)) return res.status(404).json({ error: "case_not_found" });
+      const target = findCaseFor(req, id);
+      if (!target) return res.status(404).json({ error: "case_not_found" });
       const body = z
         .object({
           name: automationName,
@@ -1466,6 +1739,11 @@ export function registerRoutes(app: Express) {
           scope: z.enum(["case", "global"]).default("case"),
         })
         .parse(req.body);
+      const p = principalOf(req);
+      if (body.scope === "global" && !can(p.permissions, "automations.manage_global"))
+        return forbidden(res, "automations.manage_global");
+      if (body.scope === "case" && !canOn(p, "automations.edit", target.ownerName))
+        return outOfScope(res, "automations.edit");
       const me = currentUser(req);
       const now = new Date().toISOString();
       const isGlobal = body.scope === "global";
@@ -1492,10 +1770,13 @@ export function registerRoutes(app: Express) {
   /** Global library listing, for admin surfaces. */
   r.get(
     "/automations",
+    allow("cases.view"),
     asyncHandler(async (req, res) => {
       const q = z.object({ scope: z.enum(["case", "global"]).optional() }).parse(req.query);
+      const p = principalOf(req);
       const rows = store.automations
         .filter((a) => (q.scope ? a.scope === q.scope : true))
+        .filter((a) => automationVisible(p, a))
         .sort((a, b) => a.name.localeCompare(b.name));
       res.json(rows.map(automationSummary));
     }),
@@ -1504,10 +1785,11 @@ export function registerRoutes(app: Express) {
   /** One automation, graph included. */
   r.get(
     "/automations/:autoId",
+    allow("cases.view"),
     asyncHandler(async (req, res) => {
       const { autoId } = autoIdParam.parse(req.params);
       const a = findAutomation(autoId);
-      if (!a) return res.status(404).json({ error: "not_found" });
+      if (!a || !automationVisible(principalOf(req), a)) return res.status(404).json({ error: "not_found" });
       res.json(a);
     }),
   );
@@ -1515,10 +1797,11 @@ export function registerRoutes(app: Express) {
   /** How many cases an edit or delete would reach. */
   r.get(
     "/automations/:autoId/usage",
+    allow("cases.view"),
     asyncHandler(async (req, res) => {
       const { autoId } = autoIdParam.parse(req.params);
       const a = findAutomation(autoId);
-      if (!a) return res.status(404).json({ error: "not_found" });
+      if (!a || !automationVisible(principalOf(req), a)) return res.status(404).json({ error: "not_found" });
       res.json(automationUsage(a));
     }),
   );
@@ -1526,10 +1809,13 @@ export function registerRoutes(app: Express) {
   /** Rename, re-graph or enable/disable. Scope is changed elsewhere. */
   r.patch(
     "/automations/:autoId",
+    allow("automations.edit", "automations.manage_global"),
     asyncHandler(async (req, res) => {
       const { autoId } = autoIdParam.parse(req.params);
+      const p = principalOf(req);
       const a = findAutomation(autoId);
-      if (!a) return res.status(404).json({ error: "not_found" });
+      if (!a || !automationVisible(p, a)) return res.status(404).json({ error: "not_found" });
+      if (!mayWriteAutomation(p, a, res)) return;
       const body = z
         .object({
           name: automationName.optional(),
@@ -1552,10 +1838,14 @@ export function registerRoutes(app: Express) {
    */
   r.delete(
     "/automations/:autoId",
+    allow("automations.edit", "automations.manage_global"),
     asyncHandler(async (req, res) => {
       const { autoId } = autoIdParam.parse(req.params);
+      const p = principalOf(req);
       const idx = store.automations.findIndex((a) => a.id === autoId);
-      if (idx === -1) return res.status(404).json({ error: "not_found" });
+      if (idx === -1 || !automationVisible(p, store.automations[idx]))
+        return res.status(404).json({ error: "not_found" });
+      if (!mayWriteAutomation(p, store.automations[idx], res)) return;
       const [removed] = store.automations.splice(idx, 1);
       if (removed.scope === "global") {
         for (const other of store.automations) {
@@ -1575,10 +1865,11 @@ export function registerRoutes(app: Express) {
    */
   r.post(
     "/automations/:autoId/promote",
+    allow("automations.manage_global"),
     asyncHandler(async (req, res) => {
       const { autoId } = autoIdParam.parse(req.params);
       const a = findAutomation(autoId);
-      if (!a) return res.status(404).json({ error: "not_found" });
+      if (!a || !automationVisible(principalOf(req), a)) return res.status(404).json({ error: "not_found" });
       if (a.scope === "global") {
         return res.status(409).json({ error: "already_global" });
       }
@@ -1598,6 +1889,7 @@ export function registerRoutes(app: Express) {
    */
   r.post(
     "/automations/:autoId/fork",
+    allow("automations.edit"),
     asyncHandler(async (req, res) => {
       const { autoId } = autoIdParam.parse(req.params);
       const source = findAutomation(autoId);
@@ -1608,8 +1900,12 @@ export function registerRoutes(app: Express) {
       if (source.scope !== "global") {
         return res.status(409).json({ error: "not_global" });
       }
-      if (!findCaseFor(req, body.caseId)) {
+      const forkCase = findCaseFor(req, body.caseId);
+      if (!forkCase) {
         return res.status(404).json({ error: "case_not_found" });
+      }
+      if (!canOn(principalOf(req), "automations.edit", forkCase.ownerName)) {
+        return outOfScope(res, "automations.edit");
       }
       if (forkedGlobalIds(body.caseId).has(source.id)) {
         return res.status(409).json({ error: "already_customized" });
@@ -1643,13 +1939,16 @@ export function registerRoutes(app: Express) {
    */
   r.post(
     "/automations/:autoId/revert",
+    allow("automations.edit"),
     asyncHandler(async (req, res) => {
       const { autoId } = autoIdParam.parse(req.params);
+      const p = principalOf(req);
       const fork = findAutomation(autoId);
-      if (!fork) return res.status(404).json({ error: "not_found" });
+      if (!fork || !automationVisible(p, fork)) return res.status(404).json({ error: "not_found" });
       if (fork.scope !== "case" || fork.derivedFromAutomationId === null) {
         return res.status(409).json({ error: "not_customized" });
       }
+      if (!mayWriteAutomation(p, fork, res)) return;
       const original = findAutomation(fork.derivedFromAutomationId);
       if (!original) {
         // The global was deleted after the fork was made; there is nothing to
@@ -1663,16 +1962,28 @@ export function registerRoutes(app: Express) {
   );
 
   // ── Stats ──────────────────────────────────────────────────────────────────
+  /**
+   * Case metrics, clamped to the caller's metrics.cases scope: company-wide
+   * (all), their teams (team) or their own (own). Asking for an employee
+   * outside that scope is refused.
+   */
   r.get(
     "/stats",
+    allow("metrics.cases"),
     asyncHandler(async (req, res) => {
       const q = z.object({ assignee: z.string().optional() }).parse(req.query);
+      const p = principalOf(req);
+      if (q.assignee !== undefined && !canOn(p, "metrics.cases", q.assignee))
+        return outOfScope(res, "metrics.cases");
+      const inMetricScope = <T extends { ownerName: string }>(rows: readonly T[]) =>
+        rowsInScope(p, "metrics.cases", rows, (x) => x.ownerName);
       const myCases = q.assignee
         ? store.cases.filter((c) => c.ownerName === q.assignee)
-        : store.cases;
+        : inMetricScope(store.cases);
+      const viewableAccounts = rowsInScope(p, "accounts.view", store.accounts, (a) => a.ownerName);
       const myAccounts = q.assignee
-        ? store.accounts.filter((a) => a.ownerName === q.assignee)
-        : store.accounts;
+        ? viewableAccounts.filter((a) => a.ownerName === q.assignee)
+        : inMetricScope(viewableAccounts);
       const myCaseIds = new Set(myCases.map((c) => c.id));
       const myTasks = store.tasks.filter((t) => myCaseIds.has(t.caseId));
 
@@ -1715,7 +2026,7 @@ export function registerRoutes(app: Express) {
   // Returns the legacy { id, name, email, phone, company, ownerName, createdAt, caseCount }
   // shape so the existing /customers and /clients/:id pages keep rendering
   // while we migrate them to the new Account/Contact UI.
-  function legacyCustomerView(a: Account) {
+  function legacyCustomerView(a: Account, p: Principal) {
     const primary = primaryContactForAccount(a.id);
     return {
       // `id` is the ACCOUNT id. `primaryContactId` is the Contact whose name,
@@ -1729,36 +2040,58 @@ export function registerRoutes(app: Express) {
       company: a.name,
       ownerName: a.ownerName,
       createdAt: a.createdAt,
-      caseCount: store.cases.filter((c) => c.accountId === a.id).length,
+      // Case information only for viewers with cases.view (R5).
+      ...(can(p.permissions, "cases.view")
+        ? { caseCount: viewableCases(p).filter((c) => c.accountId === a.id).length }
+        : {}),
     };
   }
 
   r.get(
     "/customers",
-    asyncHandler(async (_req, res) => {
-      const rows = [...store.accounts]
+    allow("accounts.view"),
+    asyncHandler(async (req, res) => {
+      const p = principalOf(req);
+      const rows = rowsInScope(p, "accounts.view", store.accounts, (a) => a.ownerName)
         .sort((a, b) => a.name.localeCompare(b.name))
-        .map(legacyCustomerView);
+        .map((a) => legacyCustomerView(a, p));
       res.json(rows);
     }),
   );
 
   r.get(
     "/customers/:id",
+    allow("accounts.view"),
     asyncHandler(async (req, res) => {
       const { id } = idParam.parse(req.params);
+      const p = principalOf(req);
       const a = store.accounts.find((x) => x.id === id);
-      if (!a) return res.status(404).json({ error: "not_found" });
-      res.json({
-        ...legacyCustomerView(a),
-        cases: store.cases.filter((c) => c.accountId === id),
-      });
+      if (!a || !canViewAccount(p, a)) return res.status(404).json({ error: "not_found" });
+      const view = legacyCustomerView(a, p);
+      if (!can(p.permissions, "cases.view")) return res.json(view);
+      res.json({ ...view, cases: viewableCases(p).filter((c) => c.accountId === id) });
     }),
   );
 
   // ── Conversations & Messages ───────────────────────────────────────────────
+  // Messaging is membership-scoped: you read and write only conversations you
+  // are a member of, and see case tags only for cases you may view.
+  function memberConversation(req: Request, id: number) {
+    const me = currentUser(req);
+    return store.conversations.find((c) => c.id === id && c.members.includes(me));
+  }
+  function visibleCaseTags(p: Principal, ids: number[]) {
+    return caseTagSummaries(
+      ids.filter((id) => {
+        const c = store.cases.find((x) => x.id === id);
+        return !!c && canViewCase(p, c);
+      }),
+    );
+  }
+
   r.get(
     "/conversations",
+    allow("messages.use"),
     asyncHandler(async (req, res) => {
       const me = currentUser(req);
       const all = store.conversations.filter((c) => c.members.includes(me));
@@ -1785,6 +2118,7 @@ export function registerRoutes(app: Express) {
 
   r.post(
     "/conversations",
+    allow("messages.use"),
     asyncHandler(async (req, res) => {
       const body = z
         .object({
@@ -1793,6 +2127,9 @@ export function registerRoutes(app: Express) {
           members: z.array(z.string()).min(1),
         })
         .parse(req.body);
+      // You can only start conversations you are part of.
+      if (!body.members.includes(currentUser(req)))
+        return res.status(400).json({ error: "creator_not_member" });
       const created = {
         id: nextConversationId(),
         name: body.name ?? null,
@@ -1807,8 +2144,11 @@ export function registerRoutes(app: Express) {
 
   r.get(
     "/conversations/:id/messages",
+    allow("messages.use"),
     asyncHandler(async (req, res) => {
       const { id } = idParam.parse(req.params);
+      if (!memberConversation(req, id)) return res.status(404).json({ error: "not_found" });
+      const p = principalOf(req);
       const rows = store.messages
         .filter((m) => m.conversationId === id)
         .sort((a, b) => +new Date(a.createdAt) - +new Date(b.createdAt))
@@ -1819,7 +2159,7 @@ export function registerRoutes(app: Express) {
           content: m.content,
           createdAt: m.createdAt,
           deletedAt: m.deletedAt,
-          caseTags: caseTagSummaries(m.caseTags),
+          caseTags: visibleCaseTags(p, m.caseTags),
         }));
       res.json(rows);
     }),
@@ -1827,6 +2167,7 @@ export function registerRoutes(app: Express) {
 
   r.post(
     "/conversations/:id/messages",
+    allow("messages.use"),
     asyncHandler(async (req, res) => {
       const { id } = idParam.parse(req.params);
       const body = z
@@ -1837,8 +2178,9 @@ export function registerRoutes(app: Express) {
           caseTags: z.array(z.number().int().positive()).optional().default([]),
         })
         .parse(req.body);
-      const conv = store.conversations.find((c) => c.id === id);
+      const conv = memberConversation(req, id);
       if (!conv) return res.status(404).json({ error: "not_found" });
+      const p = principalOf(req);
       const msg = {
         id: nextMessageId(),
         conversationId: id,
@@ -1846,22 +2188,27 @@ export function registerRoutes(app: Express) {
         content: body.content,
         createdAt: new Date().toISOString(),
         deletedAt: null,
-        caseTags: body.caseTags,
+        // Only cases the sender may view can be tagged.
+        caseTags: body.caseTags.filter((cid) => {
+          const c = store.cases.find((x) => x.id === cid);
+          return !!c && canViewCase(p, c);
+        }),
       };
       store.messages.push(msg);
       res.status(201).json({
         ...msg,
-        caseTags: caseTagSummaries(msg.caseTags),
+        caseTags: visibleCaseTags(p, msg.caseTags),
       });
     }),
   );
 
   r.delete(
     "/messages/:id",
+    allow("messages.use"),
     asyncHandler(async (req, res) => {
       const { id } = idParam.parse(req.params);
       const m = store.messages.find((x) => x.id === id);
-      if (!m) return res.status(404).json({ error: "not_found" });
+      if (!m || !memberConversation(req, m.conversationId)) return res.status(404).json({ error: "not_found" });
       // Only the author may delete — judged by the session, not a body field.
       if (m.senderName !== currentUser(req))
         return res.status(403).json({ error: "not_author" });
@@ -1871,5 +2218,5 @@ export function registerRoutes(app: Express) {
     }),
   );
 
-  app.use("/api", r);
+  return r;
 }

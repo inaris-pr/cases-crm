@@ -10,7 +10,44 @@ recovered working tree — the project had no repository, so there is no history
 ## [Unreleased]
 
 Everything since the recovery release, 2026-09-22 → 2026-09-24.
-State at the end of this section: typecheck clean, **432 tests in 34 files**.
+State at the end of this section: typecheck clean, **480 tests in 36 files**.
+
+### Security — RBAC Phase 3: backend enforcement (2026-09-24)
+- **Every `/api` route now enforces the approved role permissions.** Each
+  route declares its access (`publicRoute`, `signedIn`, `allow(...)` in
+  `src/auth/authorize.ts`); a missing capability is
+  `403 {error: "forbidden", permission}`. A test walks the router and fails
+  on any undeclared route.
+- **Record scope** (own / team / all) on list and `:id` routes: records
+  outside view scope are `404`; visible but outside the action's scope is
+  `403 {error: "out_of_scope"}`. Team scope uses the stored teams
+  (supervisors see their members' records).
+- **Leads**: CSR, Admin and HR get `403` on every `/api/leads*` request;
+  Business Advisors see their own leads, BA Supervisors their team's.
+- **Cases**: Business Advisors and HR receive no case data anywhere
+  (Account/Client/customer responses drop `cases`, `caseCount`,
+  `openCaseCount`; case tags and mentions from unviewable cases are hidden).
+  CSRs and Admins edit only their own cases but may log calls and comments
+  on any case; supervisors edit their team's.
+- **Accounts**: sensitive fields are redacted by role wherever an Account
+  appears (EIN/FinCEN ID masked, Stripe/banking identifiers omitted, with
+  `redactedFields`); edits are checked per field group, and a request
+  touching any forbidden field is rejected whole
+  (`403 {error: "forbidden_fields", fields}`).
+- **Lead conversion**: asking for a first Case without `cases.create` is
+  refused and nothing is created; conversion without it works (B4).
+- **Messages and mentions**: conversations are readable/writable by members
+  only; you can only start conversations you are in; `/mentions` returns
+  only your own and you can only mark your own read.
+- `/stats` requires `metrics.cases` and is clamped to its scope (own for
+  CSR/Admin, team for CSR Supervisor, all for Admin Supervisor/System Owner).
+- The web app is not role-aware yet (Phase 5): for roles other than System
+  Owner, some sidebar items and page sections now show errors.
+- Tests: `route-guards.test.ts` (router walk, access table, role × route for
+  all 9 roles, 401s) and `authorization-records.test.ts` (scope, isolation,
+  redaction, field groups, B4, stats, messages, mentions). The mention tests
+  in `activity.test.ts` now read each recipient's inbox with their own
+  session; `access-auth-me.test.ts`'s "not enforced yet" checks flipped to 403.
 
 ### Fixed — sign-in always lands on the Dashboard (2026-09-24)
 - **The next sign-in resumed on the page open before sign-out** — even for a

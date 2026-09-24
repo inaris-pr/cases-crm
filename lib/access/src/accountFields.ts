@@ -107,11 +107,11 @@ export function redactedAccountFields(perms: EffectivePermissions): AccountField
  * A copy of `account` as this viewer may read it, plus the list of fields
  * that were masked or omitted. Null values stay null.
  */
-export function redactAccount<T extends Record<string, unknown>>(
+export function redactAccount<T extends object>(
   account: T,
   perms: EffectivePermissions,
 ): { account: T; redactedFields: AccountField[] } {
-  const out: Record<string, unknown> = { ...account };
+  const out: Record<string, unknown> = { ...(account as Record<string, unknown>) };
   const redactedFields = redactedAccountFields(perms);
   for (const field of redactedFields) {
     const rule = ACCOUNT_READ_RULES[field]!;

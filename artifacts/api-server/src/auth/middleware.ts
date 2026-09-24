@@ -1,8 +1,8 @@
 /**
  * Request-level authentication and same-origin protection for /api.
  *
- * Phase 1 = authentication only: a request either carries a valid session or
- * gets 401. What an authenticated employee may do is Phase 2/3.
+ * A request either carries a valid session or gets 401. What the employee
+ * may then do is decided per route in auth/authorize.ts (RBAC Phase 3).
  */
 import type { NextFunction, Request, Response } from "express";
 import type { Session, User } from "../store.js";

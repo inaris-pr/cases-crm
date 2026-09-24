@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 // Every /api route requires a session: requests carry Iris's session cookie.
 import { authedRequest as request } from "./helpers/app";
-import { createTestApp, ME, asMe } from "./helpers/app";
+import { createTestApp, ME, asMe, loginAs } from "./helpers/app";
 
 const app = createTestApp();
 
@@ -112,6 +112,11 @@ describe("case thread", () => {
 });
 
 describe("@mentions", () => {
+  // The inbox is private (RBAC Phase 3): each employee reads only their own
+  // mentions, so the recipients read theirs with their own sessions.
+  const asDevon = loginAs("devon@example.com");
+  const asSara = loginAs("sara@example.com");
+
   it("creates an inbox entry for the mentioned teammate", async () => {
     await request(app)
       .post("/api/cases/1/thread")
@@ -119,7 +124,7 @@ describe("@mentions", () => {
       .send({ authorName: ME, body: "@Devon Park can you confirm the registered agent?" })
       .expect(201);
 
-    const { body } = await request(app)
+    const { body } = await request(app, await asDevon)
       .get("/api/mentions")
       .query({ for: "Devon Park" })
       .expect(200);
@@ -136,7 +141,7 @@ describe("@mentions", () => {
       .send({ authorName: ME, body: "@Sara please pick this up" })
       .expect(201);
 
-    const { body } = await request(app).get("/api/mentions").query({ for: "Sara Mitchell" }).expect(200);
+    const { body } = await request(app, await asSara).get("/api/mentions").query({ for: "Sara Mitchell" }).expect(200);
     expect(body.some((m: any) => m.body.includes("pick this up"))).toBe(true);
   });
 
@@ -158,7 +163,7 @@ describe("@mentions", () => {
       .send({ authorName: ME, body: "@Devon Park context check" })
       .expect(201);
 
-    const { body } = await request(app).get("/api/mentions").query({ for: "Devon Park" }).expect(200);
+    const { body } = await request(app, await asDevon).get("/api/mentions").query({ for: "Devon Park" }).expect(200);
     expect(body[0]).toMatchObject({ caseNumber: expect.any(String), caseTitle: expect.any(String) });
   });
 
@@ -170,10 +175,10 @@ describe("@mentions", () => {
       .expect(201);
 
     const unread = (
-      await request(app).get("/api/mentions").query({ for: "Devon Park" }).expect(200)
+      await request(app, await asDevon).get("/api/mentions").query({ for: "Devon Park" }).expect(200)
     ).body.find((m: any) => !m.readAt);
 
-    const { body } = await request(app).patch(`/api/mentions/${unread.id}/read`).expect(200);
+    const { body } = await request(app, await asDevon).patch(`/api/mentions/${unread.id}/read`).expect(200);
     expect(Date.parse(body.readAt)).not.toBeNaN();
   });
 });

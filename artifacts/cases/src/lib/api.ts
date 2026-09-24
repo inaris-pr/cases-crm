@@ -113,10 +113,17 @@ export interface Account {
   createdByName: string | null;
   lastModifiedAt: string | null;
   lastModifiedByName: string | null;
+  /**
+   * Fields the API masked or left out for this viewer (RBAC Phase 3, R2.2):
+   * `ein`/`fincenId` arrive masked, financial identifiers as null. Show them
+   * as "Restricted", never as empty (Phase 5).
+   */
+  redactedFields?: string[];
 }
 
 export interface AccountWithCounts extends Account {
   contactCount: number;
+  /** Absent for viewers without cases.view (RBAC Phase 3); UI gating is Phase 5. */
   caseCount: number;
   openCaseCount: number;
 }

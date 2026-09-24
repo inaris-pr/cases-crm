@@ -37,7 +37,7 @@ Run from `cases-app/`. Requires Node ≥20 and pnpm 9.0.0 (`corepack prepare pnp
 | `pnpm dev:api` | API only |
 | `pnpm dev:web` | Frontend only (proxies /api to :3001) |
 | `pnpm typecheck` | tsc --noEmit across the workspace (API src + tests, web, lib/db, lib/access) — **must stay clean** |
-| `pnpm test` | Vitest + Supertest suite (34 files, 432 tests) — **must stay green** |
+| `pnpm test` | Vitest + Supertest suite (36 files, 480 tests) — **must stay green** |
 | `pnpm build` | esbuild bundle for the API, `tsc -b && vite build` for the web |
 | `pnpm api:generate` | Orval regen from the OpenAPI spec — **do not run**; the spec is stale |
 
@@ -99,9 +99,22 @@ it, debounced, after every successful non-GET request.
   clears the query cache and replaces the URL with `/` before setting the
   user; sign-out/401 clears the cache and replaces the URL with `/`; a reload
   with a live session keeps the page. Never add a "return to" destination.
-- **Authentication ≠ authorization.** Every signed-in employee can still use
-  every endpoint; enforcement is Phase 3 of the RBAC plan
-  (`role-based-access-plan.md`, Revision 1, in the Project).
+- **Every route declares its access** (RBAC Phase 3, `src/auth/authorize.ts`):
+  the first handler is `publicRoute`, `signedIn` or `allow(...permissions)`.
+  `test/route-guards.test.ts` walks the router and fails on an undeclared
+  route and on any declaration that differs from its reviewed table — add
+  new routes there. Missing capability → `403 {error:"forbidden",
+  permission}`. Records are scoped per permission (own/team/all): a record
+  outside view scope is `404`; visible but outside the action's scope is
+  `403 {error:"out_of_scope"}`; a write touching fields the caller may not
+  write is `403 {error:"forbidden_fields", fields}` with nothing saved.
+  Resolve ownership only via `ownerUserFor` / `canOn` (names now, ids in
+  Phase 4); team scope = own + members of teams the caller supervises.
+- **Response shaping**: Accounts go out through `shapeAccount` (R2.2
+  redaction + `redactedFields`) wherever they appear; without `cases.view` no
+  case data at all (no `cases`, `caseCount`, `openCaseCount`, case tags);
+  messages are membership-scoped; mentions are your own only. The web app is
+  not role-aware yet (Phase 5) — pages a role may not use show errors.
 - **`lib/access` is the single source of access rules** (Phase 2): role keys,
   the permission catalog, own/team/all scopes, role bundles, Account field
   groups with sensitive-read rules, Settings/Insights permissions, the
@@ -152,7 +165,7 @@ it, debounced, after every successful non-GET request.
 ## Tests
 
 `pnpm test` from the root, or `pnpm --filter @cases/api-server test`.
-Vitest + Supertest, in `artifacts/api-server/test/` — 34 files, 432 tests.
+Vitest + Supertest, in `artifacts/api-server/test/` — 36 files, 480 tests.
 
 - **Every request needs a session.** `test/helpers/app.ts` logs in through the
   real endpoint: `asMe` is Iris's session cookie, `loginAs(email)` returns
