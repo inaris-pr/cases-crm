@@ -45,13 +45,15 @@ cases-app/
 │  ├─ cases/         React + Vite frontend
 │  └─ api-server/    Express backend + JSON-backed store (+ test/)
 └─ lib/
+   ├─ access/            Roles, permissions, Account field rules, navigation metadata
    ├─ db/                Drizzle/Postgres schema — stale, not wired up
    ├─ api-spec/          OpenAPI 3.1 — stale, covers ~25% of the API
    └─ api-client-react/  Orval target — never generated
 ```
 
-The three `lib/` packages predate the current data model and are **not** in the
-running path. See CLAUDE_HANDOFF.md §6.4 before touching them.
+`lib/access` is the shared role-based access core (used by the API; the web app
+imports its types). The other three `lib/` packages predate the current data
+model and are **not** in the running path. See CLAUDE_HANDOFF.md §6.4 before touching them.
 
 ## First run
 
@@ -99,7 +101,7 @@ arrives with the role-based access phases.
 | `pnpm dev:api` | API only |
 | `pnpm dev:web` | Frontend only |
 | `pnpm typecheck` | TypeScript across the workspace — currently clean |
-| `pnpm test` | Test suite (Vitest + Supertest) — 337 tests in 28 files |
+| `pnpm test` | Test suite (Vitest + Supertest) — 415 tests in 33 files |
 | `pnpm build` | Production builds for everything |
 | `pnpm api:generate` | Orval regen — **don't**, the spec it reads is stale |
 
@@ -158,3 +160,7 @@ configuration change. Rewrite the schema first.
   sound local prototype, not production security — see CLAUDE_HANDOFF.md §6.6.
 - On first start after upgrading, an older `store.json` is migrated in place
   after a verified backup to `artifacts/api-server/data/backups/`.
+- Roles and permissions are defined in `lib/access` and reported by
+  `GET /api/auth/me`, but **not enforced yet** — every signed-in employee can
+  still use every endpoint and see every page. Enforcement is the next phase
+  of the role-based access plan.

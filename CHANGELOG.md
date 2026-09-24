@@ -10,7 +10,28 @@ recovered working tree — the project had no repository, so there is no history
 ## [Unreleased]
 
 Everything since the recovery release, 2026-09-22 → 2026-09-24.
-State at the end of this section: typecheck clean, **337 tests in 28 files**.
+State at the end of this section: typecheck clean, **415 tests in 33 files**.
+
+### Added — RBAC Phase 2: permission core (2026-09-24)
+- **New workspace package `lib/access` (`@cases/access`)** — the shared,
+  dependency-free source of access rules, per plan Revision 1: final role
+  keys and labels; the permission catalog with `own`/`team`/`all` scopes;
+  role bundles (System Owner = everything; Filing, Filing Supervisor and
+  Partner reserved with no permissions); Account field groups with
+  sensitive-read rules (masked EIN/FinCEN ID, omitted Stripe and banking
+  identifiers) and per-group write rules; Settings, People and System
+  permissions; domain-specific Insights permissions; the resolver
+  (`resolvePermissions`, `can`, `scopeOf`, `canGrantRole`); navigation and
+  route metadata.
+- **`GET /api/auth/me` now returns `permissions`** — the signed-in
+  employee's effective permissions. The web app stores them (types from
+  `@cases/access`) but does not use them yet.
+- **Not enforced yet.** Endpoints, navigation and pages behave exactly as
+  before for every role; a CSR can still open Leads. Enforcement is Phase 3.
+- 5 new test files (78 tests): the approved permission matrix cell by cell,
+  catalog/resolver, Account fields and redaction, navigation and routes,
+  `/auth/me` permissions and the not-yet-enforced boundary.
+- `pnpm-lock.yaml` gains the `lib/access` importer; run `pnpm install` once.
 
 ### Fixed — Phase 1 browser login (2026-09-24)
 - **Browser login and every write through the Vite dev server returned

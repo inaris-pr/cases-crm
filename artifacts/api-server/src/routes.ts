@@ -2,6 +2,7 @@ import { Router, type Express, type Request, type Response, type NextFunction } 
 import { z } from "zod";
 import { authenticate, requireAuth, requireSameOrigin } from "./auth/middleware.js";
 import { publicUser } from "./auth/identity.js";
+import { resolvePermissions } from "./access.js";
 import { dummyPasswordHash, verifyPassword } from "./auth/password.js";
 import {
   absoluteTimeoutMs,
@@ -288,7 +289,9 @@ export function registerRoutes(app: Express) {
           departmentKey: t.departmentKey,
           relation: t.supervisorUserIds.includes(user.id) ? ("supervisor" as const) : ("member" as const),
         }));
-      res.json({ user: publicUser(user), teams });
+      // Effective permissions from the shared role bundles (lib/access).
+      // Phase 2: reported only — endpoints do not enforce them yet (Phase 3).
+      res.json({ user: publicUser(user), teams, permissions: resolvePermissions(user.roles) });
     }),
   );
 

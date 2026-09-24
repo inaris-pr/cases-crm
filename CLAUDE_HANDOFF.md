@@ -6,8 +6,8 @@ file in the same change.
 
 **Last synchronized with the code:** 2026-09-23, at commit `2e07101`
 (documentation-only update on top of it), then updated for **RBAC Phase 1 —
-identity foundation** (and its browser-login fix). Typecheck clean;
-**337 tests across 28 files**, all passing. Default branch `main`, pushed to the private
+identity foundation** (and its browser-login fix) and **RBAC Phase 2 —
+permission core**. Typecheck clean; **415 tests across 33 files**, all passing. Default branch `main`, pushed to the private
 remote `inaris-pr/cases-crm`.
 
 ---
@@ -37,6 +37,7 @@ Since recovery (all 2026-09-22/23, see CHANGELOG.md):
 | `979a6f7`–`2e07101` | Link corrections, case-edit validation, table sorting (§3.4) |
 | `5f78e5e` | GitHub Actions CI (typecheck + tests on push/PR to `main`) |
 | RBAC Phase 1 | Identity foundation: hashed passwords, sessions, auth on every route, roles/teams stored, store migration (§2 Authentication) |
+| RBAC Phase 2 | Permission core: `lib/access` (catalog, scopes, bundles, Account field rules, navigation metadata); `/api/auth/me` reports permissions (§2 Permissions) |
 
 ---
 
@@ -52,6 +53,7 @@ cases-app/
 │  │                 Wouter, TanStack Query v5, Recharts, Lucide
 │  └─ api-server/    Node 20+, Express 5, Zod, Pino; tsx in dev, esbuild to build
 └─ lib/
+   ├─ access/           Role-based access core     (Phase 2; pure TS, no deps)
    ├─ db/               Drizzle + postgres-js      (stale, unused)
    ├─ api-spec/         OpenAPI 3.1 YAML           (stale)
    └─ api-client-react/ Orval target               (never generated)
@@ -119,7 +121,7 @@ automations (normalizeLoaded adds the empty collection; the seed does not run).
   HTTPS); only its SHA-256 is stored. Ends after 8 h idle or 7 days, on
   logout, or when the employee is deactivated.
 - **Endpoints**: `POST /api/auth/login`, `POST /api/auth/logout`,
-  `GET /api/auth/me` (`{ user, teams }`).
+  `GET /api/auth/me` (`{ user, teams, permissions }`).
 - **Every other `/api` route requires a session** (`401 unauthenticated`).
   Identity comes only from the session; `X-User` and body names
   (`authorName`, `byName`, `senderName`) are ignored.
@@ -136,7 +138,42 @@ automations (normalizeLoaded adds the empty collection; the seed does not run).
   is kept in `localStorage`; any `401` returns to the login screen; logout
   ends the server session and clears cached data.
 - **Not yet**: roles do not restrict anything — every signed-in employee can
-  still use every endpoint (Phases 2–3).
+  still use every endpoint (Phase 3).
+
+### Permissions (RBAC Phase 2)
+
+`lib/access` (`@cases/access`) is pure TypeScript with no runtime
+dependencies, and is the only place access rules live:
+
+- `roles.ts` — final role keys and labels (`operations_admin` = "Admin"),
+  reserved roles (`filing`, `filing_supervisor`, `partner`: zero permissions),
+  department keys.
+- `permissions.ts` — the catalog: each permission is *scoped* (granted as
+  `own` | `team` | `all`) or *unscoped* (`true`). Includes the split Account
+  edit groups, `accounts.view.regulatory_ids` / `accounts.view.financial`,
+  domain Insights (`insights.cases|sales|people.view`), metrics, Accounting
+  vs Payroll, operational `settings.*`, `people.*` and privileged `system.*`.
+- `grants.ts` — role bundles exactly as in plan Revision 1 §R5; System Owner
+  is computed as every permission at `all`.
+- `resolve.ts` — `resolvePermissions(roles)` (union, widest scope wins,
+  unknown roles ignored), `can`, `scopeOf`, `canAny`, `canGrantRole`,
+  `sanitizeEffectivePermissions`.
+- `accountFields.ts` — every `Account` field in one group (base, profile,
+  service, formation, regulatory_ids, financial, system); read rules (EIN
+  masked `**-***6789`, FinCEN ID `****6789`, Stripe/banking IDs, banking
+  message and cart URL omitted); `redactAccount`, write rules
+  (`forbiddenAccountFields`; `ownerName` → `accounts.assign`, `archived` →
+  `accounts.archive`).
+- `navigation.ts` — sidebar items, Records/Insights/Accounting/Settings
+  sections (`live` vs `planned`; planned never shows an item), and
+  `ROUTE_ACCESS` for every route in `App.tsx`.
+
+The API re-exports it from `src/access.ts` (relative import, bundled by
+esbuild); `/api/auth/me` adds `permissions`. The web app imports only its
+types (`@cases/access` tsconfig path) and keeps `permissions` in
+`AuthProvider`, unused until Phase 5. **Nothing is enforced yet**:
+`access-auth-me.test.ts` asserts a CSR can still `GET /api/leads` — Phase 3
+flips that on purpose.
 
 ### Domain model
 
@@ -357,8 +394,10 @@ alias for `accountId`.
 
 ### Test coverage
 
-`pnpm test`: Vitest + Supertest, **28 files / 337 tests** in
-`artifacts/api-server/test/`. Covers authentication (passwords, sessions,
+`pnpm test`: Vitest + Supertest, **33 files / 415 tests** in
+`artifacts/api-server/test/`. Covers the permission core (the approved
+matrix cell by cell, resolver, Account field groups and redaction, navigation
+and route metadata, `/auth/me` permissions), authentication (passwords, sessions,
 expiry, revocation, throttling, spoofing, same-origin, the 401 on every route),
 the store migration, and the API end to end (stats, leads,
 conversion, accounts, contacts, links, cases incl. filters, create and update
@@ -502,8 +541,8 @@ Unrouted and imported by nothing: `pages/Customers.tsx` (still links to
 ## 7. Recommended next work
 
 **In progress: role-based access** — see `role-based-access-plan.md`
-(Revision 1) in the Project. Phase 1 (identity foundation) is done; next are
-Phase 2 (permission core, `lib/access`), Phase 3 (backend enforcement),
+(Revision 1) in the Project. Phase 1 (identity foundation) and Phase 2
+(permission core, `lib/access`) are done; next are Phase 3 (backend enforcement),
 Phase 4 (stable user ids, teams, reassignment) and Phase 5 (frontend
 navigation and gating). Personalized dashboards follow only after those.
 

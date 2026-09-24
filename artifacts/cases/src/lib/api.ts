@@ -1,5 +1,11 @@
 // Thin typed client over the Cases REST API.
 
+// Role keys and permission types come from the shared lib/access package, so
+// the web app and the API cannot disagree about them. (Type-only: erased at
+// build time.)
+import type { EffectivePermissions, RoleKey } from "@cases/access";
+export type { EffectivePermissions, RoleKey } from "@cases/access";
+
 const BASE = (import.meta.env.BASE_URL ?? "/").replace(/\/$/, "");
 export const API = (path: string) => `${BASE}${path}`;
 
@@ -283,19 +289,6 @@ export interface Conversation {
   lastMessageAt?: string | null;
 }
 
-/** Role keys (architecture plan R1). Stored now; permissions arrive in Phase 2/3. */
-export type RoleKey =
-  | "csr"
-  | "csr_supervisor"
-  | "business_advisor"
-  | "business_advisor_supervisor"
-  | "operations_admin"
-  | "operations_admin_supervisor"
-  | "hr"
-  | "system_owner"
-  | "filing"
-  | "filing_supervisor"
-  | "partner";
 
 /** The signed-in employee as the API returns it (never includes the password hash). */
 export interface User {
@@ -314,6 +307,8 @@ export interface User {
 export interface MeResponse {
   user: User;
   teams: { id: number; name: string; departmentKey: string; relation: "member" | "supervisor" }[];
+  /** Effective permissions from the user's roles (lib/access). Not yet used by the UI (Phase 5). */
+  permissions: EffectivePermissions;
 }
 
 export interface Message {

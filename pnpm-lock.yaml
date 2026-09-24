@@ -119,6 +119,12 @@ importers:
         specifier: ^5.4.10
         version: 5.4.21(@types/node@22.19.19)(lightningcss@1.32.0)
 
+  lib/access:
+    devDependencies:
+      typescript:
+        specifier: ^5.6.3
+        version: 5.9.3
+
   lib/api-client-react:
     dependencies:
       '@tanstack/react-query':

@@ -3,8 +3,10 @@
   "compilerOptions": {
     "lib": ["ES2022"],
     "types": ["node"],
-    "outDir": "dist",
-    "rootDir": "src"
+    // Type-checking only (noEmit comes from tsconfig.base.json); the build is
+    // esbuild. No rootDir, because src/access.ts pulls in the shared
+    // lib/access package from outside src/.
+    "outDir": "dist"
   },
   "include": ["src/**/*.ts"]
 }

@@ -1,42 +1,14 @@
 /**
- * Employee identity vocabulary: role keys, departments, the legacy-role
- * mapping and the demo employees/teams.
- *
- * Phase 1 (identity foundation) only STORES roles; nothing here grants or
- * denies access yet. The permission catalog and role bundles arrive in
- * Phase 2 (lib/access), which will take over ROLE_KEYS and the labels.
- * See the architecture plan, Revision 1, §R1.
+ * Employee identity data: the legacy-role mapping, the demo employees and
+ * teams, and the public shape of a user. Role keys, labels and permissions
+ * come from the shared lib/access package (architecture plan, Revision 1).
  */
 
-export const ROLE_KEYS = [
-  "csr",
-  "csr_supervisor",
-  "business_advisor",
-  "business_advisor_supervisor",
-  "operations_admin",
-  "operations_admin_supervisor",
-  "hr",
-  "system_owner",
-  // Reserved — zero permissions until defined.
-  "filing",
-  "filing_supervisor",
-  "partner",
-] as const;
-export type RoleKey = (typeof ROLE_KEYS)[number];
-
-export const DEPARTMENT_KEYS = [
-  "customer_service",
-  "business_advisors",
-  "operations",
-  "hr",
-  "filing",
-  "partners",
-] as const;
-export type DepartmentKey = (typeof DEPARTMENT_KEYS)[number];
-
-export function isRoleKey(value: unknown): value is RoleKey {
-  return typeof value === "string" && (ROLE_KEYS as readonly string[]).includes(value);
-}
+// The role and department vocabulary now lives in the shared permission
+// package (lib/access); re-exported here so existing imports keep working.
+import type { DepartmentKey, RoleKey } from "../access.js";
+export { DEPARTMENT_KEYS, ROLE_KEYS, isRoleKey } from "../access.js";
+export type { DepartmentKey, RoleKey } from "../access.js";
 
 /**
  * The pre-Phase-1 `User.role` values and what they become (decision D1).

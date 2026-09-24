@@ -36,8 +36,8 @@ Run from `cases-app/`. Requires Node ≥20 and pnpm 9.0.0 (`corepack prepare pnp
 | `pnpm dev` | API on :3001 + Vite on :5173, in parallel |
 | `pnpm dev:api` | API only |
 | `pnpm dev:web` | Frontend only (proxies /api to :3001) |
-| `pnpm typecheck` | tsc --noEmit across the workspace (API src + tests, web, lib/db) — **must stay clean** |
-| `pnpm test` | Vitest + Supertest suite (28 files, 337 tests) — **must stay green** |
+| `pnpm typecheck` | tsc --noEmit across the workspace (API src + tests, web, lib/db, lib/access) — **must stay clean** |
+| `pnpm test` | Vitest + Supertest suite (33 files, 415 tests) — **must stay green** |
 | `pnpm build` | esbuild bundle for the API, `tsc -b && vite build` for the web |
 | `pnpm api:generate` | Orval regen from the OpenAPI spec — **do not run**; the spec is stale |
 
@@ -96,8 +96,18 @@ it, debounced, after every successful non-GET request.
   ignored, and body fields such as `authorName` / `byName` / `senderName` are
   accepted but ignored — never add a route that trusts a name from the client.
 - **Authentication ≠ authorization.** Every signed-in employee can still use
-  every endpoint; role permissions are Phase 2/3 of the RBAC plan
-  (`role-based-access-plan.md` in the Project). Roles are stored on `User` now.
+  every endpoint; enforcement is Phase 3 of the RBAC plan
+  (`role-based-access-plan.md`, Revision 1, in the Project).
+- **`lib/access` is the single source of access rules** (Phase 2): role keys,
+  the permission catalog, own/team/all scopes, role bundles, Account field
+  groups with sensitive-read rules, Settings/Insights permissions, the
+  resolver (`resolvePermissions`, `can`, `scopeOf`) and navigation/route
+  metadata. The API imports it through `src/access.ts` (a relative re-export,
+  so esbuild bundles it); the web app imports **types only** via the
+  `@cases/access` tsconfig path (a Vite alias comes with Phase 5).
+  `GET /api/auth/me` returns `{ user, teams, permissions }`. Never define a
+  role list or permission name anywhere else. Access changes must update
+  `test/access-matrix.test.ts` — the approved matrix, cell by cell.
 - **Security settings are named and validated** in `src/config.ts`
   (session idle/absolute timeouts, login throttling, API bind address, cookie
   `Secure` mode, trusted frontend origins, extra CORS origins). Don't
@@ -138,7 +148,7 @@ it, debounced, after every successful non-GET request.
 ## Tests
 
 `pnpm test` from the root, or `pnpm --filter @cases/api-server test`.
-Vitest + Supertest, in `artifacts/api-server/test/` — 28 files, 337 tests.
+Vitest + Supertest, in `artifacts/api-server/test/` — 33 files, 415 tests.
 
 - **Every request needs a session.** `test/helpers/app.ts` logs in through the
   real endpoint: `asMe` is Iris's session cookie, `loginAs(email)` returns

@@ -5,7 +5,10 @@
     "jsx": "react-jsx",
     "baseUrl": ".",
     "paths": {
-      "@/*": ["src/*"]
+      "@/*": ["src/*"],
+      // Shared permission model (lib/access). Type-only imports for now; a
+      // Vite resolve.alias is added when runtime code first uses it (Phase 5).
+      "@cases/access": ["../../lib/access/src/index.ts"]
     },
     "outDir": "dist"
   },

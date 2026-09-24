@@ -1,10 +1,16 @@
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { API, UNAUTHENTICATED_EVENT, fetchJson } from "./api";
-import type { MeResponse, User } from "./api";
+import type { EffectivePermissions, MeResponse, User } from "./api";
 
 interface AuthState {
   user: User | null;
+  /**
+   * Effective permissions from GET /api/auth/me. Held here for Phase 5
+   * (navigation and gating); nothing reads them yet, and the API does not
+   * enforce them until Phase 3.
+   */
+  permissions: EffectivePermissions;
   loading: boolean;
   /** Called by the login page after POST /api/auth/login succeeded. */
   login: (user: User) => void;
@@ -28,10 +34,12 @@ const LEGACY_STORAGE_KEY = "cases.auth.user";
 export function AuthProvider({ children }: { children: ReactNode }) {
   const qc = useQueryClient();
   const [user, setUser] = useState<User | null>(null);
+  const [permissions, setPermissions] = useState<EffectivePermissions>({});
   const [loading, setLoading] = useState(true);
 
   const signedOut = useCallback(() => {
     setUser(null);
+    setPermissions({});
     qc.clear(); // never show one employee's cached data to the next
   }, [qc]);
 
@@ -43,7 +51,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
     let cancelled = false;
     fetchJson<MeResponse>(API("/api/auth/me"))
-      .then((me) => !cancelled && setUser(me.user))
+      .then((me) => {
+        if (cancelled) return;
+        setUser(me.user);
+        setPermissions(me.permissions ?? {});
+      })
       .catch(() => !cancelled && setUser(null))
       .finally(() => !cancelled && setLoading(false));
     return () => {
@@ -56,7 +68,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => window.removeEventListener(UNAUTHENTICATED_EVENT, signedOut);
   }, [signedOut]);
 
-  const login = useCallback((next: User) => setUser(next), []);
+  const login = useCallback((next: User) => {
+    setUser(next);
+    // The login response carries the user; permissions come from /auth/me.
+    fetchJson<MeResponse>(API("/api/auth/me"))
+      .then((me) => setPermissions(me.permissions ?? {}))
+      .catch(() => setPermissions({}));
+  }, []);
 
   const logout = useCallback(async () => {
     try {
@@ -68,7 +86,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [signedOut]);
 
   return (
-    <AuthContext.Provider value={{ user, loading, login, logout }}>
+    <AuthContext.Provider value={{ user, permissions, loading, login, logout }}>
       {children}
     </AuthContext.Provider>
   );
