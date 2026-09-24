@@ -37,7 +37,7 @@ Run from `cases-app/`. Requires Node ≥20 and pnpm 9.0.0 (`corepack prepare pnp
 | `pnpm dev:api` | API only |
 | `pnpm dev:web` | Frontend only (proxies /api to :3001) |
 | `pnpm typecheck` | tsc --noEmit across the workspace (API src + tests, web, lib/db, lib/access) — **must stay clean** |
-| `pnpm test` | Vitest + Supertest suite (36 files, 480 tests) — **must stay green** |
+| `pnpm test` | Vitest + Supertest suite (36 files, 485 tests) — **must stay green** |
 | `pnpm build` | esbuild bundle for the API, `tsc -b && vite build` for the web |
 | `pnpm api:generate` | Orval regen from the OpenAPI spec — **do not run**; the spec is stale |
 
@@ -109,7 +109,10 @@ it, debounced, after every successful non-GET request.
   `403 {error:"out_of_scope"}`; a write touching fields the caller may not
   write is `403 {error:"forbidden_fields", fields}` with nothing saved.
   Resolve ownership only via `ownerUserFor` / `canOn` (names now, ids in
-  Phase 4); team scope = own + members of teams the caller supervises.
+  Phase 4). **Temporary until Phase 4:** a permission held with scope
+  `team` authorizes only the caller's OWN records — ownership is still a
+  display name, so no cross-employee decision rests on it. The matrix still
+  resolves `team`; Phase 4 turns on real team ownership with stable ids.
 - **Response shaping**: Accounts go out through `shapeAccount` (R2.2
   redaction + `redactedFields`) wherever they appear; without `cases.view` no
   case data at all (no `cases`, `caseCount`, `openCaseCount`, case tags);
@@ -165,7 +168,7 @@ it, debounced, after every successful non-GET request.
 ## Tests
 
 `pnpm test` from the root, or `pnpm --filter @cases/api-server test`.
-Vitest + Supertest, in `artifacts/api-server/test/` — 36 files, 480 tests.
+Vitest + Supertest, in `artifacts/api-server/test/` — 36 files, 485 tests.
 
 - **Every request needs a session.** `test/helpers/app.ts` logs in through the
   real endpoint: `asMe` is Iris's session cookie, `loginAs(email)` returns

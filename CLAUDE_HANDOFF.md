@@ -7,7 +7,7 @@ file in the same change.
 **Last synchronized with the code:** 2026-09-23, at commit `2e07101`
 (documentation-only update on top of it), then updated for **RBAC Phase 1 —
 identity foundation** (and its browser-login fix) and **RBAC Phase 2 —
-permission core** and **RBAC Phase 3 — backend enforcement**. Typecheck clean; **480 tests across 36 files**, all passing. Default branch `main`, pushed to the private
+permission core** and **RBAC Phase 3 — backend enforcement**. Typecheck clean; **485 tests across 36 files**, all passing. Default branch `main`, pushed to the private
 remote `inaris-pr/cases-crm`.
 
 ---
@@ -183,12 +183,19 @@ Phase 3 (below) enforces them.
   `403 { error: "forbidden", permission }`. `test/route-guards.test.ts`
   walks the router (deny by default), compares every declaration with a
   reviewed table, and runs every route as every role.
-- **Principal** — `principalOf(req)`: the session's employee, their
-  effective permissions, and the members of teams they supervise.
+- **Principal** — `principalOf(req)`: the session's employee and their
+  effective permissions.
 - **Scope** — `canOn(p, permission, ownerName)` / `rowsInScope`; ownership is
   resolved only in `ownerUserFor` (unique display-name match now; stored
-  ids in Phase 4). own = mine; team = mine + members of teams I supervise
-  (live from the stored teams); all = everything.
+  ids in Phase 4). own = mine; all = everything. **team = mine only, as a
+  temporary Phase 3 safety restriction**: ownership is still a display
+  name, so a team-scoped permission does not reach another employee's
+  record yet. The matrix is unchanged (`/auth/me` still reports `team` for
+  supervisors); Phase 4 adds stable owner ids and makes team scope cover
+  the members of teams the caller supervises (`TEAM_SCOPE_COVERS_MEMBERS`
+  in `authorize.ts`). Effect today: CSR Supervisor edits only her own cases
+  (view/work stay company-wide), BA Supervisor sees only her own leads,
+  Admin Supervisor's team reassignment reaches only her own records.
 - **Outcomes** — list routes filter; a record outside *view* scope is `404`;
   visible but outside the action's scope is `403 out_of_scope` (e.g. a CSR
   editing a colleague's case — they may still log calls/comments on it,
@@ -436,7 +443,7 @@ alias for `accountId`.
 
 ### Test coverage
 
-`pnpm test`: Vitest + Supertest, **36 files / 480 tests** in
+`pnpm test`: Vitest + Supertest, **36 files / 485 tests** in
 `artifacts/api-server/test/`. Covers authorization (every route declared,
 role × route for every role, record scope, redaction, forbidden fields,
 case/lead isolation, messages, mentions, B4), the permission core (the approved

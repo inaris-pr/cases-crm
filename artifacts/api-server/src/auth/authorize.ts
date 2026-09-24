@@ -11,6 +11,13 @@
  *   they may see but not act on is `403 { error: "out_of_scope", permission }`.
  * - Ownership is resolved in ONE place, `ownerUserFor`: by display name now,
  *   by stored user id from Phase 4.
+ * - TEMPORARY (Phase 3 safety restriction): a permission held with scope
+ *   "team" authorizes only the caller's OWN records until Phase 4. Record
+ *   ownership is still a display name, and cross-employee decisions must not
+ *   rest on it. The permission matrix is unchanged — supervisors still
+ *   RESOLVE "team" (see /api/auth/me) — only this evaluator does not expand
+ *   "team" to other employees yet. Phase 4 adds stable owner user ids and
+ *   turns on real team ownership here (TEAM_SCOPE_COVERS_MEMBERS).
  *
  * Permissions come from lib/access (resolvePermissions over the employee's
  * roles). Nothing here trusts the request for identity.
@@ -34,8 +41,6 @@ import { requireAuth } from "./middleware.js";
 export interface Principal {
   user: User;
   permissions: EffectivePermissions;
-  /** Ids of the members of every team this employee supervises. */
-  supervisedUserIds: ReadonlySet<number>;
 }
 
 const principals = new WeakMap<Request, Principal>();
@@ -45,12 +50,7 @@ export function principalOf(req: Request): Principal {
   const cached = principals.get(req);
   if (cached) return cached;
   const { user } = requireAuth(req);
-  const supervisedUserIds = new Set<number>();
-  for (const team of store.teams) {
-    if (!team.supervisorUserIds.includes(user.id)) continue;
-    for (const id of team.memberUserIds) supervisedUserIds.add(id);
-  }
-  const p: Principal = { user, permissions: resolvePermissions(user.roles), supervisedUserIds };
+  const p: Principal = { user, permissions: resolvePermissions(user.roles) };
   principals.set(req, p);
   return p;
 }
@@ -69,13 +69,20 @@ export function ownerUserFor(ownerName: string | null | undefined): User | null 
   return matches.length === 1 ? matches[0] : null;
 }
 
+/**
+ * Whether "team" scope reaches records owned by the members of teams the
+ * caller supervises. FALSE until Phase 4 (see the header): team-scoped
+ * permissions cover the caller's own records only, because ownership is
+ * still stored as a display name. Phase 4 sets this from stable owner ids.
+ */
+export const TEAM_SCOPE_COVERS_MEMBERS = false as const;
+
 /** Whether a record owned by `ownerName` falls inside `scope` for `p`. */
 export function ownerInScope(p: Principal, scope: Scope, ownerName: string | null | undefined): boolean {
   if (scope === "all") return true;
+  // "own", and — until Phase 4 — "team" (team logically includes own).
   const owner = ownerUserFor(ownerName);
-  if (!owner) return false;
-  if (owner.id === p.user.id) return true; // own
-  return scope === "team" && p.supervisedUserIds.has(owner.id);
+  return owner !== null && owner.id === p.user.id;
 }
 
 /**

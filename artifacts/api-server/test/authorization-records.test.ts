@@ -14,9 +14,9 @@ const as = {
   iris: loginAs("iris@example.com"), // System Owner
   devon: loginAs("devon@example.com"), // CSR (Customer Service member)
   sara: loginAs("sara@example.com"), // CSR (Customer Service member)
-  nadia: loginAs("nadia@example.com"), // CSR Supervisor (supervises Devon, Sara)
+  nadia: loginAs("nadia@example.com"), // CSR Supervisor (team: Devon, Sara)
   leo: loginAs("leo@example.com"), // Business Advisor
-  grace: loginAs("grace@example.com"), // BA Supervisor (supervises Leo)
+  grace: loginAs("grace@example.com"), // BA Supervisor (team: Leo)
   omar: loginAs("omar@example.com"), // Admin
   rachel: loginAs("rachel@example.com"), // Admin Supervisor
   tessa: loginAs("tessa@example.com"), // HR
@@ -75,13 +75,7 @@ describe("case scope", () => {
     expect((await api("devon").post(`/cases/${other.id}/thread`, { body: "Took a call" })).status).toBe(201);
   });
 
-  it("a CSR Supervisor edits their team's cases, not other departments'", async () => {
-    expect((await api("nadia").patch(`/cases/${caseOwnedBy("Devon Park").id}`, { priority: "high" })).status).toBe(200);
-    expect((await api("nadia").patch(`/cases/${caseOwnedBy("Sara Mitchell").id}`, { priority: "high" })).status).toBe(200);
-    const res = await api("nadia").patch(`/cases/${caseOwnedBy("Iris Burgos").id}`, { priority: "high" });
-    expect(res.status).toBe(403);
-    expect(res.body.error).toBe("out_of_scope");
-  });
+  // Team scope before Phase 4: see "team scope is own-only until Phase 4" below.
 
   it("an Admin Supervisor edits any case; an Admin only their own", async () => {
     expect((await api("rachel").patch(`/cases/${caseOwnedBy("Iris Burgos").id}`, { priority: "low" })).status).toBe(200);
@@ -135,17 +129,6 @@ describe("lead scope", () => {
     expect(store.leads.find((l) => l.id === mine.body.id)!.notes).toBe("working it"); // atomic
   });
 
-  it("a BA Supervisor sees the team's leads and reassigns only inside the team", async () => {
-    const leos = await api("leo").post("/leads", { firstName: "Team", lastName: "Lead" });
-    const list = (await api("grace").get("/leads")).body as any[];
-    expect(list.some((l) => l.id === leos.body.id)).toBe(true);
-    expect(list.every((l) => ["Leo Martinez", "Grace Kim"].includes(l.ownerName))).toBe(true);
-
-    const out = await api("grace").patch(`/leads/${leos.body.id}`, { ownerName: "Iris Burgos" });
-    expect(out.body).toEqual({ error: "forbidden_fields", fields: ["ownerName"] });
-    expect((await api("grace").patch(`/leads/${leos.body.id}`, { ownerName: "Grace Kim" })).status).toBe(200);
-    expect((await api("grace").del(`/leads/${leos.body.id}`)).status).toBe(204);
-  });
 });
 
 // ── Leads never reach CSR / Admin / HR ───────────────────────────────────────
@@ -303,9 +286,9 @@ describe("Account edit field groups", () => {
     const id = conv.body.account.id;
     expect((await api("leo").patch(`/accounts/${id}`, { website: "https://leo.example", brand: "B" })).status).toBe(200);
     expect((await api("leo").patch(`/accounts/${id}`, { name: "Renamed" })).body.fields).toEqual(["name"]);
-    // The BA Supervisor reassigns inside the team only.
-    expect((await api("grace").patch(`/accounts/${id}`, { ownerName: "Iris Burgos" })).body.fields).toEqual(["ownerName"]);
-    expect((await api("grace").patch(`/accounts/${id}`, { ownerName: "Grace Kim" })).status).toBe(200);
+    // Before Phase 4 the BA Supervisor's team-scoped accounts.assign does not
+    // reach Leo's account (see "team scope is own-only until Phase 4").
+    expect((await api("grace").patch(`/accounts/${id}`, { ownerName: "Grace Kim" })).body.fields).toEqual(["ownerName"]);
   });
 
   it("creating an account needs accounts.create plus each supplied field's group", async () => {
@@ -362,9 +345,10 @@ describe("/stats is clamped to metrics.cases scope", () => {
     expect((await api("devon").get("/stats?assignee=Sara%20Mitchell")).body).toEqual({ error: "out_of_scope", permission: "metrics.cases" });
   });
 
-  it("team for a CSR Supervisor", async () => {
-    expect((await api("nadia").get("/stats")).body.totalCases).toBe(count(["Nadia Flores", "Devon Park", "Sara Mitchell"]));
-    expect((await api("nadia").get("/stats?assignee=Devon%20Park")).body.totalCases).toBe(count(["Devon Park"]));
+  it("team for a CSR Supervisor — her own cases only until Phase 4", async () => {
+    expect((await api("nadia").get("/stats")).body.totalCases).toBe(count(["Nadia Flores"]));
+    expect((await api("nadia").get("/stats?assignee=Nadia%20Flores")).status).toBe(200);
+    expect((await api("nadia").get("/stats?assignee=Devon%20Park")).body).toEqual({ error: "out_of_scope", permission: "metrics.cases" });
     expect((await api("nadia").get("/stats?assignee=Iris%20Burgos")).status).toBe(403);
   });
 
@@ -403,5 +387,84 @@ describe("mentions are private", () => {
     expect((await api("devon").get("/mentions?for=Sara%20Mitchell")).body).toEqual({ error: "not_your_mentions" });
     expect((await api("devon").patch(`/mentions/${m.id}/read`, {})).status).toBe(404);
     expect((await api("sara").patch(`/mentions/${m.id}/read`, {})).status).toBe(200);
+  });
+});
+
+// ── Team scope before Phase 4 (temporary safety restriction) ─────────────────
+
+describe("team scope is own-only until Phase 4", () => {
+  // Ownership is still stored as a display name, so until Phase 4 introduces
+  // stable owner user ids, a permission held with scope "team" authorizes
+  // only the caller's own records. The matrix itself is unchanged.
+  it("the matrix still resolves team scope for supervisors", async () => {
+    const perms = async (who: Who) => (await api(who).get("/auth/me")).body.permissions;
+    expect((await perms("nadia"))["cases.edit"]).toBe("team");
+    expect((await perms("grace"))["leads.view"]).toBe("team");
+    expect((await perms("rachel"))["accounts.assign"]).toBe("team");
+    expect((await perms("rachel"))["cases.assign"]).toBe("team");
+  });
+
+  it("Nadia keeps her company-wide case view and work", async () => {
+    const devons = caseOwnedBy("Devon Park");
+    const irises = caseOwnedBy("Iris Burgos");
+    expect((await api("nadia").get("/cases")).body).toHaveLength(store.cases.length);
+    expect((await api("nadia").get(`/cases/${devons.id}`)).status).toBe(200);
+    expect((await api("nadia").get(`/cases/${irises.id}`)).status).toBe(200);
+    expect((await api("nadia").post(`/cases/${devons.id}/thread`, { body: "Supervisor note" })).status).toBe(201);
+    expect(
+      (await api("nadia").post(`/cases/${irises.id}/contacts`, {
+        direction: "outbound", channel: "phone", summary: "Follow-up", contact: "Client",
+      })).status,
+    ).toBe(201);
+  });
+
+  it("Nadia cannot edit Devon's or Sara's case just because they are on her team", async () => {
+    for (const owner of ["Devon Park", "Sara Mitchell"]) {
+      const c = caseOwnedBy(owner);
+      const before = c.priority;
+      const res = await api("nadia").patch(`/cases/${c.id}`, { priority: before === "critical" ? "low" : "critical" });
+      expect(res.status).toBe(403);
+      expect(res.body).toEqual({ error: "out_of_scope", permission: "cases.edit" });
+      expect(store.cases.find((x) => x.id === c.id)!.priority).toBe(before);
+    }
+  });
+
+  it("team scope still covers the supervisor's own record", async () => {
+    const own = await api("nadia").post("/cases", { title: "Nadia's case", accountId: 1 });
+    expect(own.status).toBe(201);
+    expect((await api("nadia").patch(`/cases/${own.body.id}`, { priority: "high" })).status).toBe(200);
+    expect((await api("nadia").post(`/cases/${own.body.id}/automations`, { name: "Nadia's rule" })).status).toBe(201);
+
+    const lead = await api("grace").post("/leads", { firstName: "Grace's", lastName: "Own" });
+    expect((await api("grace").get("/leads")).body.some((l: any) => l.id === lead.body.id)).toBe(true);
+    expect((await api("grace").patch(`/leads/${lead.body.id}`, { notes: "mine" })).status).toBe(200);
+    expect((await api("grace").del(`/leads/${lead.body.id}`)).status).toBe(204);
+  });
+
+  it("Grace cannot reach Leo's lead through team scope", async () => {
+    const leos = (await api("leo").post("/leads", { firstName: "Leo's", lastName: "Team Lead" })).body;
+    const list = (await api("grace").get("/leads")).body as any[];
+    expect(list.some((l) => l.id === leos.id)).toBe(false);
+    expect(list.every((l) => l.ownerName === "Grace Kim")).toBe(true);
+    expect((await api("grace").patch(`/leads/${leos.id}`, { notes: "x" })).status).toBe(404);
+    expect((await api("grace").patch(`/leads/${leos.id}`, { ownerName: "Grace Kim" })).status).toBe(404);
+    expect((await api("grace").post(`/leads/${leos.id}/convert`, { accountName: "X", linkRole: "Owner" })).status).toBe(404);
+    expect((await api("grace").del(`/leads/${leos.id}`)).status).toBe(404);
+    expect(store.leads.find((l) => l.id === leos.id)!.ownerName).toBe("Leo Martinez");
+  });
+
+  it("scope all works normally", async () => {
+    // Admin Supervisor: cases.edit = all → any employee's case.
+    expect((await api("rachel").patch(`/cases/${caseOwnedBy("Devon Park").id}`, { description: "all scope" })).status).toBe(200);
+    // CSR: accounts.edit.profile = all → an account someone else owns.
+    expect((await api("devon").patch(`/accounts/${accountOwnedBy("Iris Burgos").id}`, { industry: "Software" })).status).toBe(200);
+  });
+
+  it("System Owner is unaffected", async () => {
+    const leos = (await api("leo").post("/leads", { firstName: "Owner", lastName: "Check" })).body;
+    expect((await api("iris").get("/leads")).body.some((l: any) => l.id === leos.id)).toBe(true);
+    expect((await api("iris").patch(`/leads/${leos.id}`, { ownerName: "Grace Kim" })).status).toBe(200);
+    expect((await api("iris").patch(`/cases/${caseOwnedBy("Sara Mitchell").id}`, { priority: "medium" })).status).toBe(200);
+    expect((await api("iris").get("/stats")).body.totalCases).toBe(store.cases.length);
   });
 });

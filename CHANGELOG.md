@@ -10,7 +10,23 @@ recovered working tree — the project had no repository, so there is no history
 ## [Unreleased]
 
 Everything since the recovery release, 2026-09-22 → 2026-09-24.
-State at the end of this section: typecheck clean, **480 tests in 36 files**.
+State at the end of this section: typecheck clean, **485 tests in 36 files**.
+
+### Changed — team scope is own-only until Phase 4 (2026-09-24)
+- **Temporary Phase 3 safety restriction.** A permission held with scope
+  `team` now authorizes only the caller's own records. Record ownership is
+  still stored as a display name, and cross-employee authorization must not
+  rest on it; Phase 4 introduces stable owner user ids and activates real
+  team ownership. The permission matrix is unchanged — supervisors still
+  resolve `team` in `/api/auth/me` — and `all` scope is unaffected.
+- Effect: Nadia (CSR Supervisor) can no longer edit Devon's or Sara's cases
+  (she still views and works every case); Grace (BA Supervisor) no longer
+  sees or acts on Leo's leads; team-scoped reassignment reaches only the
+  supervisor's own records; `/stats` for a CSR Supervisor covers her own
+  cases.
+- Tests: "team scope is own-only until Phase 4" in
+  `authorization-records.test.ts`; the earlier team-reach assertions were
+  replaced by their Phase 3 expectations.
 
 ### Security — RBAC Phase 3: backend enforcement (2026-09-24)
 - **Every `/api` route now enforces the approved role permissions.** Each
@@ -20,8 +36,7 @@ State at the end of this section: typecheck clean, **480 tests in 36 files**.
   on any undeclared route.
 - **Record scope** (own / team / all) on list and `:id` routes: records
   outside view scope are `404`; visible but outside the action's scope is
-  `403 {error: "out_of_scope"}`. Team scope uses the stored teams
-  (supervisors see their members' records).
+  `403 {error: "out_of_scope"}`. Team scope is own-only until Phase 4 (below).
 - **Leads**: CSR, Admin and HR get `403` on every `/api/leads*` request;
   Business Advisors see their own leads, BA Supervisors their team's.
 - **Cases**: Business Advisors and HR receive no case data anywhere
@@ -40,7 +55,8 @@ State at the end of this section: typecheck clean, **480 tests in 36 files**.
   only; you can only start conversations you are in; `/mentions` returns
   only your own and you can only mark your own read.
 - `/stats` requires `metrics.cases` and is clamped to its scope (own for
-  CSR/Admin, team for CSR Supervisor, all for Admin Supervisor/System Owner).
+  CSR/Admin, team for CSR Supervisor — own-only until Phase 4 — all for Admin
+  Supervisor/System Owner).
 - The web app is not role-aware yet (Phase 5): for roles other than System
   Owner, some sidebar items and page sections now show errors.
 - Tests: `route-guards.test.ts` (router walk, access table, role × route for

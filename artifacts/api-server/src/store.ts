@@ -247,8 +247,10 @@ export interface User {
 }
 
 /**
- * A group of employees. Supervisors' "team" scope covers records owned by the
- * members of the teams they supervise (RBAC Phase 3, auth/authorize.ts).
+ * A group of employees. Stored now; supervisors' "team" scope starts covering
+ * their members' records in Phase 4, once ownership uses stable user ids
+ * (until then "team" authorizes only the supervisor's own records —
+ * auth/authorize.ts).
  */
 export interface Team {
   id: number;

@@ -101,7 +101,7 @@ arrives with the role-based access phases.
 | `pnpm dev:api` | API only |
 | `pnpm dev:web` | Frontend only |
 | `pnpm typecheck` | TypeScript across the workspace — currently clean |
-| `pnpm test` | Test suite (Vitest + Supertest) — 480 tests in 36 files |
+| `pnpm test` | Test suite (Vitest + Supertest) — 485 tests in 36 files |
 | `pnpm build` | Production builds for everything |
 | `pnpm api:generate` | Orval regen — **don't**, the spec it reads is stale |
 
