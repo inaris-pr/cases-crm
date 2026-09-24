@@ -21,6 +21,7 @@ describe("configuration", () => {
     expect(cfg.apiPort).toBe(3001);
     expect(cfg.sessionCookieSecure).toBe("auto");
     expect(cfg.corsAllowedOrigins).toEqual([]);
+    expect(cfg.trustedFrontendOrigins).toEqual(["http://127.0.0.1:5173", "http://localhost:5173"]);
     expect(cfg.loginMaxFailuresPerAccount).toBe(5);
     expect(cfg.loginMaxFailuresPerIp).toBe(20);
     expect(cfg.loginThrottleWindowMinutes).toBe(15);
@@ -46,6 +47,13 @@ describe("configuration", () => {
     });
   });
 
+  it("reads trusted frontend origins; an empty value trusts none", () => {
+    expect(loadConfig({ TRUSTED_FRONTEND_ORIGINS: "http://127.0.0.1:4000" }).trustedFrontendOrigins).toEqual([
+      "http://127.0.0.1:4000",
+    ]);
+    expect(loadConfig({ TRUSTED_FRONTEND_ORIGINS: "" }).trustedFrontendOrigins).toEqual([]);
+  });
+
   it("rejects invalid values with a message naming the variable", () => {
     const bad: Record<string, string>[] = [
       { SESSION_IDLE_TIMEOUT_MINUTES: "eight hours" },
@@ -58,6 +66,10 @@ describe("configuration", () => {
       { CORS_ALLOWED_ORIGINS: "crm.example.com" },
       { CORS_ALLOWED_ORIGINS: "https://crm.example.com/path" },
       { PORT: "70000" },
+      { TRUSTED_FRONTEND_ORIGINS: "*" },
+      { TRUSTED_FRONTEND_ORIGINS: "127.0.0.1:5173" },
+      { TRUSTED_FRONTEND_ORIGINS: "http://127.0.0.1:5173/" },
+      { TRUSTED_FRONTEND_ORIGINS: "ftp://127.0.0.1:5173" },
     ];
     for (const env of bad) {
       expect(() => loadConfig(env)).toThrow(ConfigError);

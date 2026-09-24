@@ -10,7 +10,22 @@ recovered working tree — the project had no repository, so there is no history
 ## [Unreleased]
 
 Everything since the recovery release, 2026-09-22 → 2026-09-24.
-State at the end of this section: typecheck clean, **325 tests in 27 files**.
+State at the end of this section: typecheck clean, **337 tests in 28 files**.
+
+### Fixed — Phase 1 browser login (2026-09-24)
+- **Browser login and every write through the Vite dev server returned
+  `403 origin_not_allowed`.** Vite 5 expands the `/api` proxy shorthand to
+  `{ target, changeOrigin: true }`, which rewrites `Host` to the API's own
+  address (`127.0.0.1:3001`) while the browser's `Origin` stays
+  `http://127.0.0.1:5173`; the Phase 1 check compared `Origin` with `Host`.
+  The check now also accepts an exact list of frontend origins,
+  `TRUSTED_FRONTEND_ORIGINS` (default `http://127.0.0.1:5173` and
+  `http://localhost:5173`). Foreign origins, wrong ports or schemes, and
+  `null` origins are still refused; `X-Forwarded-*` is never trusted;
+  `CORS_ALLOWED_ORIGINS` still works. The Vite proxy is now spelled out as
+  `{ target, changeOrigin: true }` (same behaviour as before).
+- `origin-proxy.test.ts` (11 tests) drives login and writes through a proxy
+  that behaves like Vite's, plus the guard with Vite's exact headers.
 
 ### Security — RBAC Phase 1: identity foundation (2026-09-24)
 - **Every `/api` route now requires a server session** (`401` otherwise),

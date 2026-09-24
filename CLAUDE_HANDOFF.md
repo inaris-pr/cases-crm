@@ -6,8 +6,8 @@ file in the same change.
 
 **Last synchronized with the code:** 2026-09-23, at commit `2e07101`
 (documentation-only update on top of it), then updated for **RBAC Phase 1 —
-identity foundation**. Typecheck clean; **325 tests across 27 files**, all
-passing. Default branch `main`, pushed to the private
+identity foundation** (and its browser-login fix). Typecheck clean;
+**337 tests across 28 files**, all passing. Default branch `main`, pushed to the private
 remote `inaris-pr/cases-crm`.
 
 ---
@@ -125,8 +125,13 @@ automations (normalizeLoaded adds the empty collection; the seed does not run).
   (`authorName`, `byName`, `senderName`) are ignored.
 - **Throttling**: 5 failed logins per email / 20 per IP in 15 minutes → `429`.
 - **Network**: same-origin only (no CORS headers unless
-  `CORS_ALLOWED_ORIGINS`), non-GET requests from a foreign `Origin` → `403`,
-  API bound to `127.0.0.1`, Vite bound to `127.0.0.1` and proxying to it.
+  `CORS_ALLOWED_ORIGINS`), API bound to `127.0.0.1`, Vite bound to
+  `127.0.0.1` and proxying to it. A non-GET request whose `Origin` (or
+  `Referer`) is neither the API's own host nor listed exactly in
+  `TRUSTED_FRONTEND_ORIGINS` (default `http://127.0.0.1:5173`,
+  `http://localhost:5173`) or `CORS_ALLOWED_ORIGINS` → `403`. The trusted list
+  is needed because Vite's proxy (`changeOrigin: true`) rewrites `Host` to the
+  API's address; `X-Forwarded-*` headers are never trusted.
 - **Frontend**: `AuthProvider` asks `/api/auth/me`; nothing identity-related
   is kept in `localStorage`; any `401` returns to the login screen; logout
   ends the server session and clears cached data.
@@ -352,7 +357,7 @@ alias for `accountId`.
 
 ### Test coverage
 
-`pnpm test`: Vitest + Supertest, **27 files / 325 tests** in
+`pnpm test`: Vitest + Supertest, **28 files / 337 tests** in
 `artifacts/api-server/test/`. Covers authentication (passwords, sessions,
 expiry, revocation, throttling, spoofing, same-origin, the 401 on every route),
 the store migration, and the API end to end (stats, leads,

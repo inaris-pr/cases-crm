@@ -37,7 +37,7 @@ Run from `cases-app/`. Requires Node ≥20 and pnpm 9.0.0 (`corepack prepare pnp
 | `pnpm dev:api` | API only |
 | `pnpm dev:web` | Frontend only (proxies /api to :3001) |
 | `pnpm typecheck` | tsc --noEmit across the workspace (API src + tests, web, lib/db) — **must stay clean** |
-| `pnpm test` | Vitest + Supertest suite (27 files, 325 tests) — **must stay green** |
+| `pnpm test` | Vitest + Supertest suite (28 files, 337 tests) — **must stay green** |
 | `pnpm build` | esbuild bundle for the API, `tsc -b && vite build` for the web |
 | `pnpm api:generate` | Orval regen from the OpenAPI spec — **do not run**; the spec is stale |
 
@@ -100,7 +100,13 @@ it, debounced, after every successful non-GET request.
   (`role-based-access-plan.md` in the Project). Roles are stored on `User` now.
 - **Security settings are named and validated** in `src/config.ts`
   (session idle/absolute timeouts, login throttling, API bind address, cookie
-  `Secure` mode, extra CORS origins). Don't hard-code such numbers elsewhere.
+  `Secure` mode, trusted frontend origins, extra CORS origins). Don't
+  hard-code such numbers elsewhere.
+- **The browser reaches the API through Vite's proxy**, which rewrites `Host`
+  (`changeOrigin: true`). The same-origin (CSRF) check therefore accepts the
+  exact origins in `TRUSTED_FRONTEND_ORIGINS`, and never `X-Forwarded-*`.
+  `origin-proxy.test.ts` replays Vite's proxy behaviour — keep it in step with
+  `artifacts/cases/vite.config.ts`.
 - **Validation** is Zod at every route boundary. Thrown `ZodError`s become
   `400 {error: "validation_error", issues}` via the handler in `index.ts`.
   Domain rejections are `400 {error: "<snake_case_code>"}` (409 for automation
@@ -132,7 +138,7 @@ it, debounced, after every successful non-GET request.
 ## Tests
 
 `pnpm test` from the root, or `pnpm --filter @cases/api-server test`.
-Vitest + Supertest, in `artifacts/api-server/test/` — 27 files, 325 tests.
+Vitest + Supertest, in `artifacts/api-server/test/` — 28 files, 337 tests.
 
 - **Every request needs a session.** `test/helpers/app.ts` logs in through the
   real endpoint: `asMe` is Iris's session cookie, `loginAs(email)` returns

@@ -28,9 +28,15 @@ export default defineConfig({
     host: HOST,
     port: PORT,
     allowedHosts: true as any,
+    // Spelled out rather than the string shorthand, which Vite expands to
+    // exactly this: changeOrigin rewrites the Host header to the API's own
+    // address (127.0.0.1:3001), and no X-Forwarded-* headers are added. The
+    // browser's Origin (http://127.0.0.1:5173) passes through unchanged, so the
+    // API's same-origin check accepts it via TRUSTED_FRONTEND_ORIGINS
+    // (artifacts/api-server/src/config.ts), not via Host.
     proxy: {
-      "/api": API_TARGET,
-      "/healthz": API_TARGET,
+      "/api": { target: API_TARGET, changeOrigin: true },
+      "/healthz": { target: API_TARGET, changeOrigin: true },
     },
   },
 });

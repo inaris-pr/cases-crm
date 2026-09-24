@@ -14,6 +14,12 @@ export const DEFAULT_LOGIN_MAX_FAILURES_PER_IP = 20;
 export const DEFAULT_LOGIN_THROTTLE_WINDOW_MINUTES = 15;
 export const DEFAULT_API_HOST = "127.0.0.1";
 export const DEFAULT_API_PORT = 3001;
+/**
+ * Browser origins of the Vite dev server (see artifacts/cases/vite.config.ts).
+ * The dev server listens on 127.0.0.1 only, so these are only reachable from
+ * this machine. Both names are listed because the same server answers to both.
+ */
+export const DEFAULT_TRUSTED_FRONTEND_ORIGINS = ["http://127.0.0.1:5173", "http://localhost:5173"];
 
 export type CookieSecureMode = "auto" | "always" | "never";
 
@@ -34,6 +40,13 @@ export interface AppConfig {
   sessionCookieSecure: CookieSecureMode;
   /** Extra origins allowed to call the API cross-origin. Empty = same-origin only. */
   corsAllowedOrigins: string[];
+  /**
+   * Origins of the app's own frontend when it reaches the API through a
+   * reverse proxy (the Vite dev server). Such requests arrive with the
+   * proxy's rewritten Host, so the same-origin check needs to know the
+   * frontend's origin explicitly. No CORS headers are sent for these.
+   */
+  trustedFrontendOrigins: string[];
 }
 
 export class ConfigError extends Error {}
@@ -73,20 +86,9 @@ export function loadConfig(env: Env = process.env): AppConfig {
 
   const apiHost = (env.API_HOST ?? "").trim() || DEFAULT_API_HOST;
 
-  const corsAllowedOrigins = (env.CORS_ALLOWED_ORIGINS ?? "")
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
-  for (const origin of corsAllowedOrigins) {
-    try {
-      const u = new URL(origin);
-      if (u.origin !== origin) throw new Error();
-    } catch {
-      throw new ConfigError(
-        `CORS_ALLOWED_ORIGINS entries must be bare origins like https://crm.example.com (got "${origin}")`,
-      );
-    }
-  }
+  const corsAllowedOrigins = originList(env, "CORS_ALLOWED_ORIGINS", []);
+  // Unset → the local dev-server origins; set to "" → none.
+  const trustedFrontendOrigins = originList(env, "TRUSTED_FRONTEND_ORIGINS", DEFAULT_TRUSTED_FRONTEND_ORIGINS);
 
   return {
     sessionIdleTimeoutMinutes,
@@ -104,7 +106,31 @@ export function loadConfig(env: Env = process.env): AppConfig {
     apiPort: intSetting(env, "PORT", DEFAULT_API_PORT, 1, 65535),
     sessionCookieSecure: secureRaw,
     corsAllowedOrigins,
+    trustedFrontendOrigins,
   };
+}
+
+/** A comma-separated list of bare origins (scheme://host[:port]), validated. */
+function originList(env: Env, key: string, fallback: string[]): string[] {
+  const raw = env[key];
+  if (raw === undefined) return [...fallback];
+  const list = raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  for (const origin of list) {
+    let valid = false;
+    try {
+      const u = new URL(origin);
+      valid = (u.protocol === "http:" || u.protocol === "https:") && u.origin === origin;
+    } catch {
+      valid = false;
+    }
+    if (!valid) {
+      throw new ConfigError(`${key} entries must be bare origins like https://crm.example.com (got "${origin}")`);
+    }
+  }
+  return list;
 }
 
 export const config: AppConfig = loadConfig();
