@@ -1,7 +1,9 @@
-import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import { useLocation } from "wouter";
 import { API, UNAUTHENTICATED_EVENT, fetchJson } from "./api";
 import type { EffectivePermissions, MeResponse, User } from "./api";
+import { beginSession, endSession, resumeSession, type SessionEffects } from "./session";
 
 interface AuthState {
   user: User | null;
@@ -12,8 +14,11 @@ interface AuthState {
    */
   permissions: EffectivePermissions;
   loading: boolean;
-  /** Called by the login page after POST /api/auth/login succeeded. */
-  login: (user: User) => void;
+  /**
+   * Called by the login page after POST /api/auth/login succeeded. Loads the
+   * employee and permissions, clears cached data and lands on the Dashboard.
+   */
+  login: (user: User) => Promise<void>;
   /** Ends the server session, then returns to the login screen. */
   logout: () => Promise<void>;
 }
@@ -30,18 +35,28 @@ const LEGACY_STORAGE_KEY = "cases.auth.user";
  * this provider only mirrors who that session belongs to, asked from
  * GET /api/auth/me. Any 401 from the API (expired or revoked session) drops
  * the user back to the login screen.
+ *
+ * Landing rules (lib/session.ts): every sign-in lands on the Dashboard;
+ * sign-out leaves the protected URL; a reload keeps the current page.
  */
 export function AuthProvider({ children }: { children: ReactNode }) {
   const qc = useQueryClient();
   const [user, setUser] = useState<User | null>(null);
   const [permissions, setPermissions] = useState<EffectivePermissions>({});
   const [loading, setLoading] = useState(true);
+  const [, navigate] = useLocation();
 
-  const signedOut = useCallback(() => {
-    setUser(null);
-    setPermissions({});
-    qc.clear(); // never show one employee's cached data to the next
-  }, [qc]);
+  const effects = useMemo<SessionEffects<User, EffectivePermissions>>(
+    () => ({
+      clearCache: () => qc.clear(), // never show one employee's cached data to the next
+      setUser,
+      setPermissions,
+      replaceLocation: (path) => navigate(path, { replace: true }),
+    }),
+    [qc, navigate],
+  );
+
+  const signedOut = useCallback(() => endSession(effects, {}), [effects]);
 
   useEffect(() => {
     try {
@@ -53,14 +68,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     fetchJson<MeResponse>(API("/api/auth/me"))
       .then((me) => {
         if (cancelled) return;
-        setUser(me.user);
-        setPermissions(me.permissions ?? {});
+        // A reload with a live session: stay on the current page.
+        resumeSession(effects, me.user, me.permissions ?? {});
       })
       .catch(() => !cancelled && setUser(null))
       .finally(() => !cancelled && setLoading(false));
     return () => {
       cancelled = true;
     };
+    // Runs once per page load; `effects` is stable for the provider's life.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -68,13 +85,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => window.removeEventListener(UNAUTHENTICATED_EVENT, signedOut);
   }, [signedOut]);
 
-  const login = useCallback((next: User) => {
-    setUser(next);
-    // The login response carries the user; permissions come from /auth/me.
-    fetchJson<MeResponse>(API("/api/auth/me"))
-      .then((me) => setPermissions(me.permissions ?? {}))
-      .catch(() => setPermissions({}));
-  }, []);
+  const login = useCallback(
+    async (fromLogin: User) => {
+      // The new session's employee and permissions, as the server sees them.
+      let user = fromLogin;
+      let permissions: EffectivePermissions = {};
+      try {
+        const me = await fetchJson<MeResponse>(API("/api/auth/me"));
+        user = me.user;
+        permissions = me.permissions ?? {};
+      } catch {
+        // Keep the employee from the login response; permissions stay empty.
+      }
+      beginSession(effects, user, permissions);
+    },
+    [effects],
+  );
 
   const logout = useCallback(async () => {
     try {

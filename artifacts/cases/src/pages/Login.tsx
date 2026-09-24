@@ -36,7 +36,7 @@ export function LoginPage() {
         method: "POST",
         body: JSON.stringify({ email: email.trim(), password }),
       });
-      login(user);
+      await login(user); // lands on the Dashboard (lib/session.ts)
     } catch (err: any) {
       const msg = (err?.message ?? "").toLowerCase();
       setError(

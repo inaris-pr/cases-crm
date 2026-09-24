@@ -10,7 +10,18 @@ recovered working tree — the project had no repository, so there is no history
 ## [Unreleased]
 
 Everything since the recovery release, 2026-09-22 → 2026-09-24.
-State at the end of this section: typecheck clean, **415 tests in 33 files**.
+State at the end of this section: typecheck clean, **432 tests in 34 files**.
+
+### Fixed — sign-in always lands on the Dashboard (2026-09-24)
+- **The next sign-in resumed on the page open before sign-out** — even for a
+  different employee (Iris signs out on `/leads`, Devon signs in on
+  `/leads`). The login screen rendered at whatever URL was open, and signing
+  in kept it. Now every successful sign-in clears cached data and lands on
+  the Dashboard (`/`); sign-out (or an expired session) clears the cache and
+  leaves the protected URL. Reloading while signed in still keeps the
+  current page. Rules in `artifacts/cases/src/lib/session.ts`, wired up in
+  `lib/auth.tsx`.
+- `login-landing.test.ts` (17 tests).
 
 ### Added — RBAC Phase 2: permission core (2026-09-24)
 - **New workspace package `lib/access` (`@cases/access`)** — the shared,

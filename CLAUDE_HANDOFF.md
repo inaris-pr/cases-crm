@@ -7,7 +7,7 @@ file in the same change.
 **Last synchronized with the code:** 2026-09-23, at commit `2e07101`
 (documentation-only update on top of it), then updated for **RBAC Phase 1 —
 identity foundation** (and its browser-login fix) and **RBAC Phase 2 —
-permission core**. Typecheck clean; **415 tests across 33 files**, all passing. Default branch `main`, pushed to the private
+permission core**. Typecheck clean; **432 tests across 34 files**, all passing. Default branch `main`, pushed to the private
 remote `inaris-pr/cases-crm`.
 
 ---
@@ -394,7 +394,7 @@ alias for `accountId`.
 
 ### Test coverage
 
-`pnpm test`: Vitest + Supertest, **33 files / 415 tests** in
+`pnpm test`: Vitest + Supertest, **34 files / 432 tests** in
 `artifacts/api-server/test/`. Covers the permission core (the approved
 matrix cell by cell, resolver, Account field groups and redaction, navigation
 and route metadata, `/auth/me` permissions), authentication (passwords, sessions,
