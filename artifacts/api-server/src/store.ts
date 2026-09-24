@@ -9,9 +9,20 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { hashPasswordSync } from "./auth/password.js";
+import { DEMO_PASSWORD, type DepartmentKey, type RoleKey } from "./auth/identity.js";
+import {
+  CURRENT_SCHEMA_VERSION,
+  MigrationAbortError,
+  ensureDemoEmployees,
+  ensureDemoTeams,
+  migrateStoreFile,
+} from "./migrations.js";
 
 const DATA_DIR = path.resolve(process.cwd(), "data");
 const STORE_FILE = path.join(DATA_DIR, "store.json");
+/** Pre-migration backups (git-ignored with the rest of data/). */
+const BACKUP_DIR = path.join(DATA_DIR, "backups");
 
 export type CaseStatus = "intake" | "review" | "in_progress" | "waiting" | "completed";
 export type CasePriority = "low" | "medium" | "high" | "critical";
@@ -213,13 +224,51 @@ export interface Message {
   caseTags: number[];
 }
 
+/**
+ * An employee login. `passwordHash` is scrypt (see auth/password.ts) and never
+ * leaves the server — responses go through publicUser(). Roles are stored in
+ * Phase 1 but do not yet grant or deny anything (permissions arrive in
+ * Phase 2/3).
+ */
 export interface User {
   id: number;
   name: string;
   email: string;
-  password: string;
-  role: "admin" | "manager" | "case_manager" | "analyst" | "viewer";
+  passwordHash: string;
+  roles: RoleKey[];
+  departmentKey: DepartmentKey | null;
+  /** Inactive employees cannot sign in and lose their sessions. */
+  active: boolean;
+  /** Demo/test employee, safe to deactivate or remove. */
+  demo: boolean;
+  mustChangePassword: boolean;
+  lastLoginAt: string | null;
   createdAt: string;
+}
+
+/** A group of employees. Groundwork for team scope (Phase 4); no access effect yet. */
+export interface Team {
+  id: number;
+  name: string;
+  departmentKey: DepartmentKey;
+  memberUserIds: number[];
+  supervisorUserIds: number[];
+  demo: boolean;
+  createdAt: string;
+}
+
+/**
+ * A server-side login session. Only the SHA-256 of the cookie token is
+ * stored, so a copy of store.json cannot be used to sign in.
+ */
+export interface Session {
+  id: number;
+  tokenHash: string;
+  userId: number;
+  createdAt: string;
+  lastSeenAt: string;
+  /** Absolute expiry, fixed at login. The idle limit is checked against lastSeenAt. */
+  expiresAt: string;
 }
 
 export type ContactDirection = "inbound" | "outbound";
@@ -339,7 +388,11 @@ export const store = {
   threadEntries: [] as CaseThreadEntry[],
   mentions: [] as Mention[],
   users: [] as User[],
+  teams: [] as Team[],
+  sessions: [] as Session[],
   automations: [] as Automation[],
+  /** Schema version of the persisted store; see migrations.ts. */
+  meta: { schemaVersion: 0 },
   seq: {
     account: 0,
     contact: 0,
@@ -355,6 +408,8 @@ export const store = {
     threadEntry: 0,
     mention: 0,
     user: 0,
+    team: 0,
+    session: 0,
     automation: 0,
   },
 };
@@ -378,6 +433,8 @@ export const nextThreadEntryId = () => nextId("threadEntry");
 export const nextMentionId = () => nextId("mention");
 export const nextUserId = () => nextId("user");
 export const nextAutomationId = () => nextId("automation");
+export const nextTeamId = () => nextId("team");
+export const nextSessionId = () => nextId("session");
 
 export function userByEmail(email: string): User | undefined {
   const lc = email.toLowerCase();
@@ -513,6 +570,8 @@ const COLLECTION_SEQ: ReadonlyArray<
   ["threadEntries", "threadEntry"],
   ["mentions", "mention"],
   ["users", "user"],
+  ["teams", "team"],
+  ["sessions", "session"],
   ["automations", "automation"],
 ];
 
@@ -565,29 +624,71 @@ function normalizeLoaded() {
   }
 }
 
+/**
+ * Hydrates the store from store.json, migrating it first if it is behind
+ * CURRENT_SCHEMA_VERSION (backup + verification + atomic write — see
+ * migrations.ts). Returns false when there is no usable file, in which case
+ * seed() builds the demo data.
+ *
+ * A file that exists but cannot be read or parsed, or a migration that cannot
+ * be completed safely, STOPS startup (MigrationAbortError) rather than falling
+ * back to the seed — the seed would overwrite the file on the next write.
+ */
 function loadFromDisk(): boolean {
+  if (!fs.existsSync(STORE_FILE)) return false;
+
+  let sourceBytes: Buffer;
+  let parsed: any;
   try {
-    if (!fs.existsSync(STORE_FILE)) return false;
-    const raw = fs.readFileSync(STORE_FILE, "utf-8");
-    const parsed = JSON.parse(raw);
-    // Guard 1: legacy Customer-based schema → re-seed.
-    if (Array.isArray((parsed as { customers?: unknown }).customers)) {
-      console.warn("[store] legacy schema detected — running fresh seed");
-      return false;
-    }
-    // Guard 2: accounts exist but pre-date the Salesforce-style field set
-    // (no `portalId` etc). Re-seed so the new fields show up populated.
-    const accs = (parsed as { accounts?: Array<Record<string, unknown>> }).accounts;
-    if (Array.isArray(accs) && accs.length > 0 && !("portalId" in accs[0])) {
-      console.warn("[store] pre-portal-fields schema detected — running fresh seed");
-      return false;
-    }
-    Object.assign(store, parsed);
-    normalizeLoaded();
-    return true;
-  } catch (err) {
-    console.warn("[store] failed to load persisted store:", err);
+    sourceBytes = fs.readFileSync(STORE_FILE);
+    parsed = JSON.parse(sourceBytes.toString("utf-8"));
+  } catch (err: any) {
+    throw new MigrationAbortError(
+      `${STORE_FILE} exists but could not be read as JSON (${err?.message ?? err}). ` +
+        "Refusing to start so it is not overwritten; restore it from data/backups or store.snapshot.json.",
+    );
+  }
+
+  // Guard 1: legacy Customer-based schema → re-seed.
+  if (Array.isArray((parsed as { customers?: unknown }).customers)) {
+    console.warn("[store] legacy schema detected — running fresh seed");
     return false;
+  }
+  // Guard 2: accounts exist but pre-date the Salesforce-style field set
+  // (no `portalId` etc). Re-seed so the new fields show up populated.
+  const accs = (parsed as { accounts?: Array<Record<string, unknown>> }).accounts;
+  if (Array.isArray(accs) && accs.length > 0 && !("portalId" in accs[0])) {
+    console.warn("[store] pre-portal-fields schema detected — running fresh seed");
+    return false;
+  }
+
+  const result = migrateStoreFile({
+    storeFile: STORE_FILE,
+    backupDir: BACKUP_DIR,
+    sourceBytes,
+    data: parsed,
+  });
+  if (result.status === "migrated") logMigration(result.report);
+
+  Object.assign(store, result.data);
+  normalizeLoaded();
+  return true;
+}
+
+function logMigration(report: import("./migrations.js").MigrationReport) {
+  // Deliberately plain console output: this runs before the HTTP logger and
+  // must be visible in the terminal that starts the API.
+  console.warn(
+    `[store] migrated ${report.storeFile} from schema v${report.fromVersion} to v${report.toVersion}\n` +
+      `[store]   backup: ${report.backupPath}\n` +
+      `[store]   sha256: ${report.sourceSha256} (backup verified)`,
+  );
+  for (const step of report.steps) {
+    console.warn(
+      `[store]   step v${step.version} ${step.name}: ${step.users.length} user(s) migrated, ` +
+        `${step.demoEmployeesAdded.length} demo employee(s) added, ${step.demoTeamsAdded.length} demo team(s) added`,
+    );
+    for (const w of step.warnings) console.warn(`[store]   warning: ${w}`);
   }
 }
 
@@ -609,32 +710,36 @@ export function seed() {
   if (loadFromDisk()) return;
 
   // ── Users (login accounts) ──────────────────────────────────────────────
+  // Existing employees (D1): Iris = System Owner, Devon and Sara = CSR.
+  // Passwords are only ever stored hashed.
+  const employee = (
+    name: string,
+    email: string,
+    roles: RoleKey[],
+    departmentKey: DepartmentKey | null,
+    createdAt: string,
+  ): User => ({
+    id: nextUserId(),
+    name,
+    email,
+    passwordHash: hashPasswordSync(DEMO_PASSWORD),
+    roles,
+    departmentKey,
+    active: true,
+    demo: false,
+    mustChangePassword: false,
+    lastLoginAt: null,
+    createdAt,
+  });
   store.users.push(
-    {
-      id: nextUserId(),
-      name: "Iris Burgos",
-      email: "iris@example.com",
-      password: "test123",
-      role: "admin",
-      createdAt: daysAgo(60),
-    },
-    {
-      id: nextUserId(),
-      name: "Devon Park",
-      email: "devon@example.com",
-      password: "test123",
-      role: "case_manager",
-      createdAt: daysAgo(45),
-    },
-    {
-      id: nextUserId(),
-      name: "Sara Mitchell",
-      email: "sara@example.com",
-      password: "test123",
-      role: "case_manager",
-      createdAt: daysAgo(40),
-    },
+    employee("Iris Burgos", "iris@example.com", ["system_owner"], null, daysAgo(60)),
+    employee("Devon Park", "devon@example.com", ["csr"], "customer_service", daysAgo(45)),
+    employee("Sara Mitchell", "sara@example.com", ["csr"], "customer_service", daysAgo(40)),
   );
+  // Demo employees and teams — the same helpers the store migration uses, so
+  // a fresh seed and a migrated store end up with identical identities.
+  ensureDemoEmployees(store, daysAgo(1));
+  ensureDemoTeams(store, daysAgo(1));
 
   // ── Contacts (people) ───────────────────────────────────────────────────
   // Hassan Patel is the showcase: one contact, linked to THREE accounts.
@@ -1455,6 +1560,7 @@ export function seed() {
     lastModifiedByName: "Iris Burgos",
   });
 
+  store.meta.schemaVersion = CURRENT_SCHEMA_VERSION;
   persist();
 }
 

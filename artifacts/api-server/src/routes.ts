@@ -1,5 +1,18 @@
 import { Router, type Express, type Request, type Response, type NextFunction } from "express";
 import { z } from "zod";
+import { authenticate, requireAuth, requireSameOrigin } from "./auth/middleware.js";
+import { publicUser } from "./auth/identity.js";
+import { dummyPasswordHash, verifyPassword } from "./auth/password.js";
+import {
+  absoluteTimeoutMs,
+  buildClearedSessionCookie,
+  buildSessionCookie,
+  cookieShouldBeSecure,
+  createSession,
+  revokeSessionToken,
+  sessionTokenFrom,
+} from "./auth/sessions.js";
+import { loginThrottle } from "./auth/throttle.js";
 import {
   store,
   seed,
@@ -176,9 +189,12 @@ function caseWithRelations(c: Case) {
   return { ...c, customerId: c.accountId, account, primaryContact, customer };
 }
 
-function currentUser(req: Request): string | null {
-  const h = req.header("X-User");
-  return h && h.trim() ? h.trim() : null;
+/**
+ * Display name of the signed-in employee, from the server session.
+ * Never from the X-User header or a request body (Phase 1).
+ */
+function currentUser(req: Request): string {
+  return requireAuth(req).user.name;
 }
 
 function findCaseFor(_req: Request, id: number): Case | undefined {
@@ -198,19 +214,81 @@ export function registerRoutes(app: Express) {
     next();
   });
 
+  // Every state-changing /api request must come from this origin (CSRF).
+  r.use(requireSameOrigin);
+
   // ── Auth ───────────────────────────────────────────────────────────────────
+  // POST /api/auth/login   — public; sets the session cookie
+  // POST /api/auth/logout  — public; ends the session if there is one
+  // GET  /api/auth/me      — the signed-in employee (behind authenticate)
   r.post(
     "/auth/login",
     asyncHandler(async (req, res) => {
       const body = z
         .object({ email: z.string().min(3), password: z.string().min(1) })
         .parse(req.body);
-      const user = userByEmail(body.email);
-      if (!user || user.password !== body.password) {
+      const email = body.email.trim().toLowerCase();
+      const ip = req.ip ?? "unknown";
+
+      const gate = loginThrottle.check(email, ip);
+      if (!gate.allowed) {
+        res.setHeader("Retry-After", String(gate.retryAfterSeconds));
+        return res
+          .status(429)
+          .json({ error: "too_many_attempts", retryAfterSeconds: gate.retryAfterSeconds });
+      }
+
+      const user = userByEmail(email);
+      // Verify against a dummy hash for unknown emails so both paths cost the same.
+      const ok = await verifyPassword(body.password, user?.passwordHash || dummyPasswordHash());
+      if (!user || !ok) {
+        loginThrottle.recordFailure(email, ip);
         return res.status(401).json({ error: "invalid_credentials" });
       }
-      const { password: _p, ...safe } = user;
-      res.json(safe);
+      if (!user.active) {
+        return res.status(403).json({ error: "account_inactive" });
+      }
+
+      loginThrottle.recordSuccess(email);
+      user.lastLoginAt = new Date().toISOString();
+      const { token } = createSession(user.id);
+      res.setHeader(
+        "Set-Cookie",
+        buildSessionCookie(token, {
+          secure: cookieShouldBeSecure(req),
+          maxAgeSeconds: Math.floor(absoluteTimeoutMs() / 1000),
+        }),
+      );
+      res.json(publicUser(user));
+    }),
+  );
+
+  r.post(
+    "/auth/logout",
+    asyncHandler(async (req, res) => {
+      const token = sessionTokenFrom(req);
+      if (token) revokeSessionToken(token);
+      res.setHeader("Set-Cookie", buildClearedSessionCookie({ secure: cookieShouldBeSecure(req) }));
+      res.status(204).end();
+    }),
+  );
+
+  // ── Everything below requires a signed-in employee ──────────────────────────
+  r.use(authenticate);
+
+  r.get(
+    "/auth/me",
+    asyncHandler(async (req, res) => {
+      const { user } = requireAuth(req);
+      const teams = store.teams
+        .filter((t) => t.memberUserIds.includes(user.id) || t.supervisorUserIds.includes(user.id))
+        .map((t) => ({
+          id: t.id,
+          name: t.name,
+          departmentKey: t.departmentKey,
+          relation: t.supervisorUserIds.includes(user.id) ? ("supervisor" as const) : ("member" as const),
+        }));
+      res.json({ user: publicUser(user), teams });
     }),
   );
 
@@ -287,7 +365,7 @@ export function registerRoutes(app: Express) {
 
       const accountId = body.accountId ?? body.customerId;
       if (!accountId) return res.status(400).json({ error: "missing_account" });
-      const me = currentUser(req) ?? "Iris Burgos";
+      const me = currentUser(req);
       const account = store.accounts.find((a) => a.id === accountId);
       if (!account) return res.status(400).json({ error: "unknown_account" });
 
@@ -450,7 +528,7 @@ export function registerRoutes(app: Express) {
           parentAccountId: z.number().int().positive().nullable().optional(),
         })
         .parse(req.body);
-      const me = currentUser(req) ?? "Iris Burgos";
+      const me = currentUser(req);
       const now = new Date().toISOString();
       const created: Account = {
         id: nextAccountId(),
@@ -595,7 +673,7 @@ export function registerRoutes(app: Express) {
       if (!a) return res.status(404).json({ error: "not_found" });
       Object.assign(a, body);
       // Always bump last-modified on a PATCH.
-      const me = currentUser(req) ?? a.ownerName;
+      const me = currentUser(req);
       a.lastModifiedAt = new Date().toISOString();
       a.lastModifiedByName = me;
       res.json(accountWithCounts(a));
@@ -667,7 +745,7 @@ export function registerRoutes(app: Express) {
           title: z.string().optional(),
         })
         .parse(req.body);
-      const me = currentUser(req) ?? "Iris Burgos";
+      const me = currentUser(req);
       const created: Contact = {
         id: nextContactId(),
         firstName: body.firstName,
@@ -852,7 +930,7 @@ export function registerRoutes(app: Express) {
           estimatedValue: z.number().optional(),
         })
         .parse(req.body);
-      const me = currentUser(req) ?? "Iris Burgos";
+      const me = currentUser(req);
       const now = new Date().toISOString();
       const created: Lead = {
         id: nextLeadId(),
@@ -934,7 +1012,7 @@ export function registerRoutes(app: Express) {
         return res.status(409).json({ error: "already_converted" });
 
       const now = new Date().toISOString();
-      const me = currentUser(req) ?? lead.ownerName;
+      const me = currentUser(req);
 
       // 1. Create Account
       const account: Account = makeAccount({
@@ -1159,7 +1237,8 @@ export function registerRoutes(app: Express) {
           channel: contactChannel,
           summary: z.string().min(1),
           contact: z.string().min(1),
-          byName: z.string().min(1),
+          // Accepted for compatibility but ignored: the author is the session.
+          byName: z.string().optional(),
         })
         .parse(req.body);
       const c = findCaseFor(req, id);
@@ -1171,7 +1250,7 @@ export function registerRoutes(app: Express) {
         channel: body.channel,
         summary: body.summary,
         contact: body.contact,
-        byName: body.byName,
+        byName: currentUser(req),
         createdAt: new Date().toISOString(),
       };
       store.caseInteractions.push(created);
@@ -1198,28 +1277,30 @@ export function registerRoutes(app: Express) {
       const { id } = idParam.parse(req.params);
       const body = z
         .object({
-          authorName: z.string().min(1),
+          // Accepted for compatibility but ignored: the author is the session.
+          authorName: z.string().optional(),
           body: z.string().min(1),
         })
         .parse(req.body);
       const c = findCaseFor(req, id);
       if (!c) return res.status(404).json({ error: "not_found" });
+      const author = currentUser(req);
       const created = {
         id: nextThreadEntryId(),
         caseId: id,
-        authorName: body.authorName,
+        authorName: author,
         body: body.body,
         createdAt: new Date().toISOString(),
       };
       store.threadEntries.push(created);
 
-      const mentioned = parseMentions(body.body, body.authorName);
+      const mentioned = parseMentions(body.body, author);
       for (const recipient of mentioned) {
         store.mentions.push({
           id: nextMentionId(),
           threadEntryId: created.id,
           caseId: c.id,
-          fromName: body.authorName,
+          fromName: author,
           toName: recipient,
           body: body.body,
           readAt: null,
@@ -1382,7 +1463,7 @@ export function registerRoutes(app: Express) {
           scope: z.enum(["case", "global"]).default("case"),
         })
         .parse(req.body);
-      const me = currentUser(req) ?? "Iris Burgos";
+      const me = currentUser(req);
       const now = new Date().toISOString();
       const isGlobal = body.scope === "global";
       const created: Automation = {
@@ -1456,7 +1537,7 @@ export function registerRoutes(app: Express) {
       if (body.name !== undefined) a.name = body.name;
       if (body.graph !== undefined) a.graph = body.graph;
       if (body.enabled !== undefined) a.enabled = body.enabled;
-      touch(a, currentUser(req) ?? a.ownerName);
+      touch(a, currentUser(req));
       res.json(a);
     }),
   );
@@ -1501,7 +1582,7 @@ export function registerRoutes(app: Express) {
       a.originCaseId = a.caseId;
       a.caseId = null;
       a.scope = "global";
-      touch(a, currentUser(req) ?? a.ownerName);
+      touch(a, currentUser(req));
       res.json(a);
     }),
   );
@@ -1530,7 +1611,7 @@ export function registerRoutes(app: Express) {
       if (forkedGlobalIds(body.caseId).has(source.id)) {
         return res.status(409).json({ error: "already_customized" });
       }
-      const me = currentUser(req) ?? "Iris Burgos";
+      const me = currentUser(req);
       const now = new Date().toISOString();
       const copy: Automation = {
         id: nextAutomationId(),
@@ -1677,9 +1758,7 @@ export function registerRoutes(app: Express) {
     "/conversations",
     asyncHandler(async (req, res) => {
       const me = currentUser(req);
-      const all = me
-        ? store.conversations.filter((c) => c.members.includes(me))
-        : store.conversations;
+      const all = store.conversations.filter((c) => c.members.includes(me));
       const rows = [...all]
         .sort((a, b) => +new Date(b.createdAt) - +new Date(a.createdAt))
         .map((c) => {
@@ -1749,7 +1828,8 @@ export function registerRoutes(app: Express) {
       const { id } = idParam.parse(req.params);
       const body = z
         .object({
-          senderName: z.string().min(1),
+          // Accepted for compatibility but ignored: the sender is the session.
+          senderName: z.string().optional(),
           content: z.string().min(1),
           caseTags: z.array(z.number().int().positive()).optional().default([]),
         })
@@ -1759,7 +1839,7 @@ export function registerRoutes(app: Express) {
       const msg = {
         id: nextMessageId(),
         conversationId: id,
-        senderName: body.senderName,
+        senderName: currentUser(req),
         content: body.content,
         createdAt: new Date().toISOString(),
         deletedAt: null,
@@ -1777,10 +1857,10 @@ export function registerRoutes(app: Express) {
     "/messages/:id",
     asyncHandler(async (req, res) => {
       const { id } = idParam.parse(req.params);
-      const body = z.object({ senderName: z.string().min(1) }).parse(req.body);
       const m = store.messages.find((x) => x.id === id);
       if (!m) return res.status(404).json({ error: "not_found" });
-      if (m.senderName !== body.senderName)
+      // Only the author may delete — judged by the session, not a body field.
+      if (m.senderName !== currentUser(req))
         return res.status(403).json({ error: "not_author" });
       m.deletedAt = new Date().toISOString();
       m.content = "";

@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import request from "supertest";
+// Every /api route requires a session: requests carry Iris's session cookie.
+import { authedRequest as request } from "./helpers/app";
 import { createTestApp, ME, asMe } from "./helpers/app";
 
 const app = createTestApp();
@@ -8,9 +9,10 @@ const app = createTestApp();
  * The case activity surfaces: logged interactions (calls, emails, meetings)
  * and the internal comment thread, plus the @mention inbox the thread feeds.
  *
- * Note the identity convention: the X-User header is sent on every request,
- * but these routes additionally require the author's name in the body
- * (byName / authorName). Both are load-bearing — see CLAUDE.md.
+ * Identity: every request carries a session cookie, and the author of an
+ * interaction or comment is the session's employee. The body's byName /
+ * authorName are still accepted (older clients send them) but ignored —
+ * see auth-sessions.test.ts for the spoofing checks.
  */
 describe("case interactions", () => {
   it("lists the interactions seeded against a case", async () => {
@@ -51,14 +53,17 @@ describe("case interactions", () => {
       .expect(201);
   });
 
-  it("requires the author name in the body", async () => {
+  // Phase 1: this used to assert 400 when `byName` was missing from the body.
+  // The author now comes from the session, so a body without it is valid and
+  // is attributed to the signed-in employee.
+  it("attributes an interaction to the signed-in employee when no author is sent", async () => {
     const { body } = await request(app)
       .post("/api/cases/1/contacts")
       .set(asMe)
       .send({ direction: "outbound", channel: "phone", summary: "No author", contact: "Amelia Reyes" })
-      .expect(400);
+      .expect(201);
 
-    expect(body.error).toBe("validation_error");
+    expect(body.byName).toBe(ME);
   });
 
   it("rejects an unknown channel", async () => {

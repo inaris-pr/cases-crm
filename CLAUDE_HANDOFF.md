@@ -5,8 +5,9 @@ re-discovering the repository. If you change the architecture, update this
 file in the same change.
 
 **Last synchronized with the code:** 2026-09-23, at commit `2e07101`
-(documentation-only update on top of it). Typecheck clean; **262 API tests
-across 20 files**, all passing. Default branch `main`, pushed to the private
+(documentation-only update on top of it), then updated for **RBAC Phase 1 —
+identity foundation**. Typecheck clean; **325 tests across 27 files**, all
+passing. Default branch `main`, pushed to the private
 remote `inaris-pr/cases-crm`.
 
 ---
@@ -34,6 +35,8 @@ Since recovery (all 2026-09-22/23, see CHANGELOG.md):
 | `b73d9f4` | Contextual case creation from Account and Client pages (§3.2) |
 | `d5c6f86` | Consolidated Records workspace (§3.3) |
 | `979a6f7`–`2e07101` | Link corrections, case-edit validation, table sorting (§3.4) |
+| `5f78e5e` | GitHub Actions CI (typecheck + tests on push/PR to `main`) |
+| RBAC Phase 1 | Identity foundation: hashed passwords, sessions, auth on every route, roles/teams stored, store migration (§2 Authentication) |
 
 ---
 
@@ -56,8 +59,9 @@ cases-app/
 
 ### Persistence
 
-There is **no database**. `api-server/src/store.ts` holds **fourteen**
-in-memory arrays plus an id-sequence object. A router-level hook persists the
+There is **no database**. `api-server/src/store.ts` holds **sixteen**
+in-memory arrays (including `teams` and `sessions`), a `meta.schemaVersion`
+and an id-sequence object. A router-level hook persists the
 whole store to `artifacts/api-server/data/store.json` (debounced 100 ms)
 after every successful non-GET request.
 
@@ -71,22 +75,63 @@ repaired from the highest id present (and `caseNumber` from the highest
 `CASE-nnn`). It never drops or rewrites existing records. Adding a collection
 means adding one line to `COLLECTION_SEQ`.
 
+**Versioned migrations** (`src/migrations.ts`, from RBAC Phase 1): the store
+records `meta.schemaVersion` (currently 1). When `store.json` is behind,
+startup copies it byte-for-byte to
+`data/backups/store.pre-v<N>.from-v<M>.<timestamp>.json` (exclusive create,
+never overwriting), re-reads the copy and compares SHA-256 with the source,
+checks the source did not change meanwhile, runs the ordered idempotent steps
+in memory, and writes the result atomically (temp file + rename). Any failure
+throws `MigrationAbortError` and startup stops with `store.json` untouched. A
+`store.json` that exists but is not valid JSON also stops startup rather than
+being replaced by the seed. Step v1 (identity foundation) hashes passwords,
+maps legacy roles, adds user flags, and adds the demo employees and teams.
+
 Seed contents (verified by running `seed()`): 17 accounts, 21 contacts,
 23 account–contact links, 8 leads, 15 cases, 65 tasks, 12 documents,
-15 interactions, 14 thread entries, 3 users, **1 global automation**
-("High-priority intake routing"), and **no conversations, messages or
-mentions**. All fictional.
+15 interactions, 14 thread entries, **9 employees** (Iris, Devon, Sara + 6 demo
+employees), **3 demo teams**, **1 global automation** ("High-priority intake
+routing"), and **no conversations, messages, mentions or sessions**. All
+fictional.
 
 `store.snapshot.json` (committed) is a restore point of the data as recovered
 on 2026-09-22. It **predates automations**: restoring it gives zero
 automations (normalizeLoaded adds the empty collection; the seed does not run).
 
-### Auth — effectively none
+### Authentication (RBAC Phase 1)
 
-`POST /api/auth/login` compares **plaintext** passwords and returns the user.
-The frontend keeps it in `localStorage` (`cases.auth.user`) and sends
-`X-User: <name>`, which the server trusts as identity. No tokens, no
-sessions, no route protection.
+- **Employees** (`User`): `roles[]` (keys from the architecture plan: `csr`,
+  `csr_supervisor`, `business_advisor`, `business_advisor_supervisor`,
+  `operations_admin`, `operations_admin_supervisor`, `hr`, `system_owner`,
+  and reserved `filing`, `filing_supervisor`, `partner`), `departmentKey`,
+  `active`, `demo`, `passwordHash`, `mustChangePassword`, `lastLoginAt`.
+  Iris = `system_owner`; Devon, Sara = `csr`; demo employees Nadia
+  (`csr_supervisor`), Leo (`business_advisor`), Grace
+  (`business_advisor_supervisor`), Omar (`operations_admin`), Rachel
+  (`operations_admin_supervisor`), Tessa (`hr`). All use `test123`.
+- **Teams** (`Team`): Customer Service (Devon, Sara; supervisor Nadia),
+  Business Advisors (Leo; Grace), Operations (Omar; Rachel). Stored only —
+  team scope arrives in Phase 4.
+- **Passwords**: scrypt via Node's `crypto` (unique 16-byte salt, constant-time
+  comparison; `src/auth/password.ts`). Never returned by any endpoint.
+- **Sessions** (`src/auth/sessions.ts`): random 256-bit token in an
+  HttpOnly, SameSite=Lax cookie `cases_session` (Path `/api`; `Secure` over
+  HTTPS); only its SHA-256 is stored. Ends after 8 h idle or 7 days, on
+  logout, or when the employee is deactivated.
+- **Endpoints**: `POST /api/auth/login`, `POST /api/auth/logout`,
+  `GET /api/auth/me` (`{ user, teams }`).
+- **Every other `/api` route requires a session** (`401 unauthenticated`).
+  Identity comes only from the session; `X-User` and body names
+  (`authorName`, `byName`, `senderName`) are ignored.
+- **Throttling**: 5 failed logins per email / 20 per IP in 15 minutes → `429`.
+- **Network**: same-origin only (no CORS headers unless
+  `CORS_ALLOWED_ORIGINS`), non-GET requests from a foreign `Origin` → `403`,
+  API bound to `127.0.0.1`, Vite bound to `127.0.0.1` and proxying to it.
+- **Frontend**: `AuthProvider` asks `/api/auth/me`; nothing identity-related
+  is kept in `localStorage`; any `401` returns to the login screen; logout
+  ends the server session and clears cached data.
+- **Not yet**: roles do not restrict anything — every signed-in employee can
+  still use every endpoint (Phases 2–3).
 
 ### Domain model
 
@@ -115,7 +160,7 @@ Robert Chen). Never use one where the other belongs — see §3.4.
 
 ### API
 
-**51 routes** under `/api`: auth; cases (list/filters, create, detail,
+**53 routes** under `/api`: auth (login, logout, me); cases (list/filters, create, detail,
 update); accounts; contacts; account-contacts; leads incl. convert; tasks;
 documents; `cases/:id/contacts`; `cases/:id/thread`; mentions; team; stats;
 conversations + messages; **automations** (10 routes, §3.1); and the
@@ -307,8 +352,10 @@ alias for `accountId`.
 
 ### Test coverage
 
-`pnpm test`: Vitest + Supertest, **20 files / 262 tests** in
-`artifacts/api-server/test/`. Covers the API end to end (auth, stats, leads,
+`pnpm test`: Vitest + Supertest, **27 files / 325 tests** in
+`artifacts/api-server/test/`. Covers authentication (passwords, sessions,
+expiry, revocation, throttling, spoofing, same-origin, the 401 on every route),
+the store migration, and the API end to end (stats, leads,
 conversion, accounts, contacts, links, cases incl. filters, create and update
 validation, tasks, documents, interactions, thread, mentions, messages,
 automations incl. scopes/fork/revert/delete, store migration, the `/customers`
@@ -407,9 +454,15 @@ Unrouted and imported by nothing: `pages/Customers.tsx` (still links to
 
 - **JSON-file store**: single process, whole-file rewrites, no transactions,
   no concurrent-user safety.
-- **Plaintext passwords**, trusted `X-User` header, no route protection.
-- **Identity passed two ways** — `X-User` *and* `authorName` / `byName` /
-  `senderName` in bodies depending on the route.
+- **Authentication exists, authorization does not yet**: any signed-in
+  employee can call any endpoint (RBAC Phases 2–3).
+- **Ownership is still by display name** (`ownerName`, `authorName`, …);
+  stable user ids arrive in Phase 4. `TEAM_MEMBERS` (owner pickers, mention
+  parsing) still lists only Iris, Devon and Sara.
+- **Demo credentials**: every employee uses `test123`; the login page lists
+  them in development builds. Sessions and login throttling are in-process.
+- **Not production-grade**: no SSO/MFA, no password change or reset UI, no
+  audit log yet.
 - **Types duplicated** between `api-server/src/store.ts` and
   `cases/src/lib/api.ts`; edit together.
 
@@ -442,6 +495,12 @@ Unrouted and imported by nothing: `pages/Customers.tsx` (still links to
 ---
 
 ## 7. Recommended next work
+
+**In progress: role-based access** — see `role-based-access-plan.md`
+(Revision 1) in the Project. Phase 1 (identity foundation) is done; next are
+Phase 2 (permission core, `lib/access`), Phase 3 (backend enforcement),
+Phase 4 (stable user ids, teams, reassignment) and Phase 5 (frontend
+navigation and gating). Personalized dashboards follow only after those.
 
 1. **CI** — `pnpm install --frozen-lockfile && pnpm typecheck && pnpm test`
    on push.

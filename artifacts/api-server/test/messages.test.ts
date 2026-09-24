@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
-import request from "supertest";
-import { createTestApp, ME, asMe } from "./helpers/app";
+// Every /api route requires a session: requests carry Iris's session cookie.
+import { authedRequest as request } from "./helpers/app";
+import { createTestApp, ME, asMe, loginAs } from "./helpers/app";
 
 const app = createTestApp();
 
@@ -142,9 +143,12 @@ describe("messages", () => {
         .expect(201)
     ).body;
 
-    const { body } = await request(app)
+    // Identity comes from the session: Devon, signed in as himself, tries to
+    // delete Iris's message. (Previously this sent `senderName: "Devon Park"`
+    // in the body, which no longer establishes identity.)
+    const asDevon = await loginAs("devon@example.com");
+    const { body } = await request(app, asDevon)
       .delete(`/api/messages/${sent.id}`)
-      .send({ senderName: "Devon Park" })
       .expect(403);
 
     expect(body.error).toBe("not_author");

@@ -3,27 +3,29 @@
 const BASE = (import.meta.env.BASE_URL ?? "/").replace(/\/$/, "");
 export const API = (path: string) => `${BASE}${path}`;
 
-function currentUserName(): string | null {
-  try {
-    const raw = localStorage.getItem("cases.auth.user");
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    return typeof parsed?.name === "string" ? parsed.name : null;
-  } catch {
-    return null;
-  }
-}
+/**
+ * Fired whenever the API answers 401 (no session, or it expired or was
+ * revoked). AuthProvider listens and returns the app to the login screen.
+ */
+export const UNAUTHENTICATED_EVENT = "cases:unauthenticated";
 
+/**
+ * Identity travels only in the HttpOnly session cookie the API sets at login;
+ * the browser attaches it automatically (same origin via the Vite proxy).
+ * Nothing identity-related is read from localStorage or sent as a header.
+ */
 export async function fetchJson<T = unknown>(url: string, opts: RequestInit = {}): Promise<T> {
-  const me = currentUserName();
   const r = await fetch(url, {
     ...opts,
+    credentials: "same-origin",
     headers: {
       "Content-Type": "application/json",
-      ...(me ? { "X-User": me } : {}),
       ...(opts.headers ?? {}),
     },
   });
+  if (r.status === 401) {
+    window.dispatchEvent(new Event(UNAUTHENTICATED_EVENT));
+  }
   if (!r.ok) {
     const text = await r.text().catch(() => "");
     throw new Error(text || r.statusText);
@@ -281,14 +283,37 @@ export interface Conversation {
   lastMessageAt?: string | null;
 }
 
-export type UserRole = "admin" | "manager" | "case_manager" | "analyst" | "viewer";
+/** Role keys (architecture plan R1). Stored now; permissions arrive in Phase 2/3. */
+export type RoleKey =
+  | "csr"
+  | "csr_supervisor"
+  | "business_advisor"
+  | "business_advisor_supervisor"
+  | "operations_admin"
+  | "operations_admin_supervisor"
+  | "hr"
+  | "system_owner"
+  | "filing"
+  | "filing_supervisor"
+  | "partner";
 
+/** The signed-in employee as the API returns it (never includes the password hash). */
 export interface User {
   id: number;
   name: string;
   email: string;
-  role: UserRole;
+  roles: RoleKey[];
+  departmentKey: string | null;
+  active: boolean;
+  demo: boolean;
+  mustChangePassword: boolean;
+  lastLoginAt: string | null;
   createdAt: string;
+}
+
+export interface MeResponse {
+  user: User;
+  teams: { id: number; name: string; departmentKey: string; relation: "member" | "supervisor" }[];
 }
 
 export interface Message {

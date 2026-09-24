@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll } from "vitest";
-import request from "supertest";
+// Every /api route requires a session: requests carry Iris's session cookie.
+import { authedRequest as request } from "./helpers/app";
 import { createTestApp, ME, asMe } from "./helpers/app";
 
 const app = createTestApp();

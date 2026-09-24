@@ -67,16 +67,26 @@ pnpm install --frozen-lockfile
 pnpm dev
 ```
 
-That starts the API on `http://localhost:3001` and Vite on
-`http://localhost:5173`. Open the Vite URL.
+That starts the API on `http://127.0.0.1:3001` and Vite on
+`http://127.0.0.1:5173`. Open the Vite URL. Both listen on this machine only
+(see Notes to change that).
 
-Sign in with any of the seeded users — password `test123` for all three:
+Sign in with any of these accounts — password `test123` for all:
 
-| Email | Role |
-|---|---|
-| `iris@example.com` | admin |
-| `devon@example.com` | case manager |
-| `sara@example.com` | case manager |
+| Email | Role | |
+|---|---|---|
+| `iris@example.com` | System Owner | |
+| `devon@example.com` | CSR | |
+| `sara@example.com` | CSR | |
+| `nadia@example.com` | CSR Supervisor | demo |
+| `leo@example.com` | Business Advisor | demo |
+| `grace@example.com` | Business Advisor Supervisor | demo |
+| `omar@example.com` | Admin | demo |
+| `rachel@example.com` | Admin Supervisor | demo |
+| `tessa@example.com` | HR | demo |
+
+Roles are recorded but do not yet change what anyone can see or do — that
+arrives with the role-based access phases.
 
 > Coming from another machine? `node_modules` is platform-specific. Delete it
 > and reinstall rather than copying it across.
@@ -89,7 +99,7 @@ Sign in with any of the seeded users — password `test123` for all three:
 | `pnpm dev:api` | API only |
 | `pnpm dev:web` | Frontend only |
 | `pnpm typecheck` | TypeScript across the workspace — currently clean |
-| `pnpm test` | Test suite (Vitest + Supertest) — 262 tests in 20 files |
+| `pnpm test` | Test suite (Vitest + Supertest) — 325 tests in 27 files |
 | `pnpm build` | Production builds for everything |
 | `pnpm api:generate` | Orval regen — **don't**, the spec it reads is stale |
 
@@ -138,6 +148,13 @@ configuration change. Rewrite the schema first.
   from the sidebar.
 - The API base URL is `import.meta.env.BASE_URL + /api/...`, so the app works
   behind a sub-path proxy.
-- Vite binds `0.0.0.0` and reads `VITE_PORT`/`PORT`, so it works in cloud IDEs.
-- Auth is a demo: plaintext passwords, an `X-User` header the server trusts,
-  and no protected routes. Don't expose this to a network you don't control.
+- Vite binds `127.0.0.1` and reads `VITE_PORT`/`PORT`. Set `VITE_HOST=0.0.0.0`
+  (and `API_HOST` for the API) only when you deliberately need network access,
+  e.g. in a cloud IDE.
+- Sign-in uses server-side sessions: passwords are stored as scrypt hashes,
+  the session is an HttpOnly cookie (8-hour idle / 7-day absolute limits,
+  configurable — see `.env.example`), every API route requires it, repeated
+  failed logins are throttled, and cross-origin writes are refused. This is a
+  sound local prototype, not production security — see CLAUDE_HANDOFF.md §6.6.
+- On first start after upgrading, an older `store.json` is migrated in place
+  after a verified backup to `artifacts/api-server/data/backups/`.

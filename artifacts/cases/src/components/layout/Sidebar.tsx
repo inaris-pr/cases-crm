@@ -169,7 +169,7 @@ function UserChip({ expanded }: { expanded: boolean }) {
         ) : null}
       </AnimatePresence>
       <button
-        onClick={logout}
+        onClick={() => void logout()}
         title="Sign out"
         className="size-7 grid place-items-center rounded-md text-white/50 hover:text-rose-300 hover:bg-rose-500/10 shrink-0"
       >

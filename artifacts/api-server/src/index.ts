@@ -1,13 +1,14 @@
 import "dotenv/config";
 import express from "express";
-import cors from "cors";
 import pinoHttp from "pino-http";
 import { logger } from "./logger.js";
 import { registerRoutes } from "./routes.js";
+import { applyCorsPolicy } from "./security.js";
+import { config } from "./config.js";
 
 const app = express();
 
-app.use(cors());
+applyCorsPolicy(app);
 app.use(express.json({ limit: "5mb" }));
 app.use(pinoHttp({ logger, autoLogging: { ignore: (req) => req.url === "/healthz" } }));
 
@@ -28,7 +29,8 @@ app.use((err: any, _req: express.Request, res: express.Response, _next: express.
   res.status(err?.status || 500).json({ error: err?.message || "internal_error" });
 });
 
-const port = Number(process.env.PORT ?? 3001);
-app.listen(port, () => {
-  logger.info(`✓ Cases API listening on http://localhost:${port}`);
+// Bound to 127.0.0.1 by default so the API is not reachable from the local
+// network; set API_HOST (e.g. 0.0.0.0) to change that deliberately.
+app.listen(config.apiPort, config.apiHost, () => {
+  logger.info(`✓ Cases API listening on http://${config.apiHost}:${config.apiPort}`);
 });

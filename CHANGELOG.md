@@ -9,8 +9,48 @@ recovered working tree — the project had no repository, so there is no history
 
 ## [Unreleased]
 
-Everything since the recovery release, 2026-09-22 → 2026-09-23.
-State at the end of this section: typecheck clean, **262 tests in 20 files**.
+Everything since the recovery release, 2026-09-22 → 2026-09-24.
+State at the end of this section: typecheck clean, **325 tests in 27 files**.
+
+### Security — RBAC Phase 1: identity foundation (2026-09-24)
+- **Every `/api` route now requires a server session** (`401` otherwise),
+  except `POST /api/auth/login` and `POST /api/auth/logout`. New
+  `GET /api/auth/me` returns the signed-in employee and their teams.
+- **Identity comes only from the session.** The `X-User` header no longer
+  identifies anyone; `authorName`, `byName` and `senderName` in request
+  bodies are accepted but ignored; message deletion checks the real author.
+  `GET /api/conversations` always lists only the signed-in employee's
+  conversations.
+- **Passwords hashed** with Node's built-in scrypt (unique salt,
+  constant-time verification); plaintext removed from the store; hashes never
+  returned. Deactivated employees cannot sign in and lose their sessions.
+- **Server-side sessions**: random token in an HttpOnly, SameSite=Lax cookie
+  (Secure over HTTPS), only its hash stored; 8-hour idle / 7-day absolute
+  limits as named, validated settings (`src/config.ts`, `.env.example`).
+- **Login throttling**: 5 failures per email or 20 per IP in 15 minutes → 429.
+- **Network**: CORS same-origin only (opt-in `CORS_ALLOWED_ORIGINS`);
+  non-GET requests with a foreign `Origin`/`Referer` → 403; API binds to
+  `127.0.0.1` (`API_HOST`); Vite binds to `127.0.0.1` (`VITE_HOST`) and
+  proxies to `127.0.0.1` instead of `localhost`.
+- **Employee model**: `roles[]`, `departmentKey`, `active`, `demo`,
+  `passwordHash`, `mustChangePassword`, `lastLoginAt` (legacy `role` →
+  `roles`: `admin` → `system_owner`, `case_manager` → `csr`). Roles are stored
+  only; no permission checks yet (Phases 2–3).
+- **Demo employees** (password `test123`, flagged `demo`): Nadia Flores (CSR
+  Supervisor), Leo Martinez (Business Advisor), Grace Kim (Business Advisor
+  Supervisor), Omar Haddad (Admin), Rachel Stein (Admin Supervisor), Tessa
+  Nguyen (HR). **Demo teams**: Customer Service, Business Advisors, Operations.
+- **Versioned store migrations** (`src/migrations.ts`): verified,
+  never-overwriting backup in `data/backups/`, idempotent steps, atomic write;
+  any failure — or an unparseable `store.json` — stops startup with the file
+  untouched (previously an unreadable file was silently replaced by the seed).
+- **Frontend**: session-cookie auth via `/api/auth/me`; no identity in
+  `localStorage`; 401 → login screen; logout ends the server session and
+  clears cached data; demo credentials listed only in development builds.
+- **Tests**: helper `loginAs()` / `authedRequest()` sign in through the real
+  endpoint; 63 new tests (passwords, config, throttling, sessions, expiry,
+  revocation, spoofing, same-origin, 401 on every route, migration safety and
+  idempotency, startup migration, corrupt store).
 
 ### Added
 

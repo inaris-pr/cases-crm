@@ -7,6 +7,19 @@ import { useAuth } from "@/lib/auth";
 import { Button } from "@/components/ui/Button";
 import { Input, Label } from "@/components/ui/Input";
 
+/** Development-only hint list; mirrors the seeded/demo employees. */
+const DEMO_ACCOUNTS: [string, string][] = [
+  ["iris@example.com", "System Owner"],
+  ["devon@example.com", "CSR"],
+  ["sara@example.com", "CSR"],
+  ["nadia@example.com", "CSR Supervisor"],
+  ["leo@example.com", "Business Advisor"],
+  ["grace@example.com", "Business Advisor Supervisor"],
+  ["omar@example.com", "Admin"],
+  ["rachel@example.com", "Admin Supervisor"],
+  ["tessa@example.com", "HR"],
+];
+
 export function LoginPage() {
   const { login } = useAuth();
   const [email, setEmail] = useState("");
@@ -29,7 +42,11 @@ export function LoginPage() {
       setError(
         msg.includes("invalid_credentials") || msg.includes("401")
           ? "Wrong email or password."
-          : "Couldn't sign in. Try again in a moment.",
+          : msg.includes("too_many_attempts")
+            ? "Too many failed attempts. Wait a few minutes and try again."
+            : msg.includes("account_inactive")
+              ? "This account has been deactivated."
+              : "Couldn't sign in. Try again in a moment.",
       );
     } finally {
       setSubmitting(false);
@@ -118,14 +135,19 @@ export function LoginPage() {
           </Button>
         </form>
 
-        <div className="mt-5 pt-4 border-t border-white/5 text-[11px] text-white/40">
-          <div className="label-eyebrow mb-1.5">Demo accounts</div>
-          <div className="space-y-0.5 font-mono">
-            <div>iris@example.com · test123</div>
-            <div>devon@example.com · test123</div>
-            <div>sara@example.com · test123</div>
+        {/* Demo credentials are a development aid only — never in a production build. */}
+        {import.meta.env.DEV && (
+          <div className="mt-5 pt-4 border-t border-white/5 text-[11px] text-white/40">
+            <div className="label-eyebrow mb-1.5">Demo accounts · password test123</div>
+            <div className="space-y-0.5 font-mono">
+              {DEMO_ACCOUNTS.map(([email, label]) => (
+                <div key={email}>
+                  {email} <span className="text-white/25">· {label}</span>
+                </div>
+              ))}
+            </div>
           </div>
-        </div>
+        )}
       </motion.div>
     </div>
   );

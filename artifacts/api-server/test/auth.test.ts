@@ -11,10 +11,11 @@ describe("POST /api/auth/login", () => {
       .send({ email: "iris@example.com", password: "test123" })
       .expect(200);
 
+    // Phase 1: the single legacy `role: "admin"` became `roles: ["system_owner"]`.
     expect(body).toMatchObject({
       name: "Iris Burgos",
       email: "iris@example.com",
-      role: "admin",
+      roles: ["system_owner"],
     });
   });
 

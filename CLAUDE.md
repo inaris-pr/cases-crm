@@ -37,11 +37,14 @@ Run from `cases-app/`. Requires Node ≥20 and pnpm 9.0.0 (`corepack prepare pnp
 | `pnpm dev:api` | API only |
 | `pnpm dev:web` | Frontend only (proxies /api to :3001) |
 | `pnpm typecheck` | tsc --noEmit across the workspace (API src + tests, web, lib/db) — **must stay clean** |
-| `pnpm test` | Vitest + Supertest suite (20 files, 262 tests) — **must stay green** |
+| `pnpm test` | Vitest + Supertest suite (27 files, 325 tests) — **must stay green** |
 | `pnpm build` | esbuild bundle for the API, `tsc -b && vite build` for the web |
 | `pnpm api:generate` | Orval regen from the OpenAPI spec — **do not run**; the spec is stale |
 
-Log in with `iris@example.com` / `test123` (also `devon@`, `sara@`).
+Log in with `iris@example.com` / `test123` (System Owner). Every employee —
+including the demo employees for each role (`nadia@`, `leo@`, `grace@`,
+`omar@`, `rachel@`, `tessa@`) — uses `test123`, stored only as a scrypt hash.
+The login page lists them in development builds only.
 
 `node_modules` is platform-specific. If it was installed on macOS, Vitest and
 Vite cannot run from a Linux sandbox (darwin esbuild binary), though `tsc`
@@ -59,6 +62,12 @@ it, debounced, after every successful non-GET request.
   overwrites you.
 - Two guards in `loadFromDisk()` force a re-seed for pre-Account files. If you
   add or rename a field on `Account`, add a guard.
+- **Schema changes to existing records go through `src/migrations.ts`**: bump
+  `CURRENT_SCHEMA_VERSION`, add an idempotent step, add tests. On startup an
+  out-of-date `store.json` is backed up to `data/backups/` (exclusive create,
+  SHA-256 verified), migrated in memory and written atomically; any failure
+  stops startup with the file untouched. A `store.json` that cannot be parsed
+  also stops startup — it is never replaced by the seed.
 - If you add a **collection**, add it to `COLLECTION_SEQ` in `store.ts`.
   `normalizeLoaded()` then back-fills it (and its id counter) for older files
   instead of producing `NaN` ids. `test/migration.test.ts` covers this.
@@ -80,10 +89,18 @@ it, debounced, after every successful non-GET request.
 - **Case ↔ Account ↔ Contact rules are enforced on the server** in both
   `POST` and `PATCH /api/cases`. A primary contact must exist and be actively
   linked to the case's account. Don't rely on the UI for this.
-- **Identity** travels two ways and both are load-bearing: an `X-User` header
-  set by `fetchJson` in `lib/api.ts`, *and* explicit `authorName` / `byName` /
-  `senderName` fields in request bodies for thread entries, interactions and
-  messages. (Unifying these is listed as debt — don't do it opportunistically.)
+- **Identity comes only from the server session** (Phase 1). Login sets an
+  HttpOnly `cases_session` cookie; `authenticate` resolves it on every `/api`
+  route except login/logout and puts the employee on `req.auth`. Use
+  `currentUser(req)` / `requireAuth(req)` in routes. The `X-User` header is
+  ignored, and body fields such as `authorName` / `byName` / `senderName` are
+  accepted but ignored — never add a route that trusts a name from the client.
+- **Authentication ≠ authorization.** Every signed-in employee can still use
+  every endpoint; role permissions are Phase 2/3 of the RBAC plan
+  (`role-based-access-plan.md` in the Project). Roles are stored on `User` now.
+- **Security settings are named and validated** in `src/config.ts`
+  (session idle/absolute timeouts, login throttling, API bind address, cookie
+  `Secure` mode, extra CORS origins). Don't hard-code such numbers elsewhere.
 - **Validation** is Zod at every route boundary. Thrown `ZodError`s become
   `400 {error: "validation_error", issues}` via the handler in `index.ts`.
   Domain rejections are `400 {error: "<snake_case_code>"}` (409 for automation
@@ -115,7 +132,14 @@ it, debounced, after every successful non-GET request.
 ## Tests
 
 `pnpm test` from the root, or `pnpm --filter @cases/api-server test`.
-Vitest + Supertest, in `artifacts/api-server/test/` — 20 files, 262 tests.
+Vitest + Supertest, in `artifacts/api-server/test/` — 27 files, 325 tests.
+
+- **Every request needs a session.** `test/helpers/app.ts` logs in through the
+  real endpoint: `asMe` is Iris's session cookie, `loginAs(email)` returns
+  another employee's, and `authedRequest(app, headers?)` is `request(app)` with
+  a cookie on every call — feature tests import it as `request`. Tests of
+  authentication itself use plain `supertest`. Tests that change a user or
+  revoke sessions use a demo employee, never Iris.
 
 - **Isolation is the important part.** `test/setup.ts` chdirs into a fresh
   temp directory before anything imports the store, so the suite can never
@@ -151,6 +175,9 @@ Vitest + Supertest, in `artifacts/api-server/test/` — 20 files, 262 tests.
 
 Do not, without being asked:
 
+- Weaken authentication: every `/api` route except login/logout must stay
+  behind `authenticate` (`auth-sessions.test.ts` enumerates the routes in
+  `routes.ts` and fails if one answers without a session).
 - Delete the legacy `Customer` shim (`/api/customers`, the synthesized
   `customer` object, `customerId`) or change the stand-in `primaryContact`
   fallback in `caseWithRelations()`. The Board, the global New Case form, and

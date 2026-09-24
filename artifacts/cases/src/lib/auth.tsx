@@ -1,54 +1,71 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
-import type { User } from "./api";
+import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { API, UNAUTHENTICATED_EVENT, fetchJson } from "./api";
+import type { MeResponse, User } from "./api";
 
 interface AuthState {
   user: User | null;
   loading: boolean;
+  /** Called by the login page after POST /api/auth/login succeeded. */
   login: (user: User) => void;
-  logout: () => void;
+  /** Ends the server session, then returns to the login screen. */
+  logout: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthState | null>(null);
 
-const STORAGE_KEY = "cases.auth.user";
+/** Where the pre-Phase-1 client kept the signed-in user. No longer used. */
+const LEGACY_STORAGE_KEY = "cases.auth.user";
 
+/**
+ * Authentication state backed by the server session.
+ *
+ * The session lives in an HttpOnly cookie the browser sends automatically;
+ * this provider only mirrors who that session belongs to, asked from
+ * GET /api/auth/me. Any 401 from the API (expired or revoked session) drops
+ * the user back to the login screen.
+ */
 export function AuthProvider({ children }: { children: ReactNode }) {
+  const qc = useQueryClient();
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
 
-  // Restore session from localStorage on mount.
+  const signedOut = useCallback(() => {
+    setUser(null);
+    qc.clear(); // never show one employee's cached data to the next
+  }, [qc]);
+
   useEffect(() => {
     try {
-      const raw = localStorage.getItem(STORAGE_KEY);
-      if (raw) {
-        const parsed = JSON.parse(raw) as User;
-        if (parsed && typeof parsed.email === "string") {
-          setUser(parsed);
-        }
-      }
+      localStorage.removeItem(LEGACY_STORAGE_KEY);
     } catch {
-      // ignore malformed storage
+      // storage unavailable — nothing to clean up
     }
-    setLoading(false);
+    let cancelled = false;
+    fetchJson<MeResponse>(API("/api/auth/me"))
+      .then((me) => !cancelled && setUser(me.user))
+      .catch(() => !cancelled && setUser(null))
+      .finally(() => !cancelled && setLoading(false));
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
-  function login(next: User) {
-    setUser(next);
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
-    } catch {
-      // ignore
-    }
-  }
+  useEffect(() => {
+    window.addEventListener(UNAUTHENTICATED_EVENT, signedOut);
+    return () => window.removeEventListener(UNAUTHENTICATED_EVENT, signedOut);
+  }, [signedOut]);
 
-  function logout() {
-    setUser(null);
+  const login = useCallback((next: User) => setUser(next), []);
+
+  const logout = useCallback(async () => {
     try {
-      localStorage.removeItem(STORAGE_KEY);
+      await fetchJson(API("/api/auth/logout"), { method: "POST" });
     } catch {
-      // ignore
+      // Even if the request fails, forget the user locally.
     }
-  }
+    signedOut();
+  }, [signedOut]);
 
   return (
     <AuthContext.Provider value={{ user, loading, login, logout }}>
