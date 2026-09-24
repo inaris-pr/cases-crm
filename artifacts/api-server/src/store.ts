@@ -20,7 +20,9 @@ import {
   migrateStoreFile,
 } from "./migrations.js";
 
-const DATA_DIR = path.resolve(process.cwd(), "data");
+// CASES_DATA_DIR relocates the store (e.g. the Playwright suite runs the API
+// on a throwaway directory so it never touches data/store.json).
+const DATA_DIR = path.resolve(process.env.CASES_DATA_DIR || path.join(process.cwd(), "data"));
 const STORE_FILE = path.join(DATA_DIR, "store.json");
 /** Pre-migration backups (git-ignored with the rest of data/). */
 const BACKUP_DIR = path.join(DATA_DIR, "backups");

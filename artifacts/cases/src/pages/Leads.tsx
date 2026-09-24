@@ -8,6 +8,9 @@ import { Button } from "@/components/ui/Button";
 import { Modal } from "@/components/ui/Modal";
 import { cn } from "@/lib/cn";
 import { formatRelative } from "@/lib/format";
+import { createActions, leadControls } from "@cases/access";
+import { useAccess } from "@/lib/useAccess";
+import { ReassignControl } from "@/components/ReassignControl";
 
 const STAGES: { id: LeadStatus; label: string; color: string }[] = [
   { id: "new", label: "New", color: "rgba(59,130,246,1)" },
@@ -31,6 +34,8 @@ export function Leads() {
   const [ownerFilter, setOwnerFilter] = useState("");
   const [converting, setConverting] = useState<Lead | null>(null);
   const [creating, setCreating] = useState(false);
+  const access = useAccess();
+  const actions = createActions(access.permissions);
 
   const leadsQuery = useQuery({
     queryKey: ["leads", { search, ownerFilter }],
@@ -67,10 +72,10 @@ export function Leads() {
           <Stat label="Total" value={totals.total} />
           <Stat label="Open" value={totals.open} />
           <Stat label="Pipeline value" value={`$${totals.value.toLocaleString()}`} />
-          <Button onClick={() => setCreating(true)}>
+          {actions.newLead && (<Button onClick={() => setCreating(true)}>
             <Plus size={14} />
             New lead
-          </Button>
+          </Button>)}
         </div>
       </div>
 
@@ -133,6 +138,7 @@ export function Leads() {
 
 function Kanban({ leads, onConvert }: { leads: Lead[]; onConvert: (l: Lead) => void }) {
   const qc = useQueryClient();
+  const access = useAccess();
   const moveLead = useMutation({
     mutationFn: (vars: { id: number; status: LeadStatus }) =>
       fetchJson<Lead>(API(`/api/leads/${vars.id}`), {
@@ -153,7 +159,9 @@ function Kanban({ leads, onConvert }: { leads: Lead[]; onConvert: (l: Lead) => v
             onDragOver={(e) => e.preventDefault()}
             onDrop={(e) => {
               const id = Number(e.dataTransfer.getData("text/plain"));
-              if (Number.isFinite(id)) moveLead.mutate({ id, status: stage.id });
+              const lead = leads.find((x) => x.id === id);
+              // Moving a lead is an edit (leads.edit on that lead).
+              if (lead && leadControls(access, lead).edit) moveLead.mutate({ id, status: stage.id });
             }}
           >
             <div className="flex items-center justify-between mb-3">
@@ -175,11 +183,15 @@ function Kanban({ leads, onConvert }: { leads: Lead[]; onConvert: (l: Lead) => v
               {items.map((l) => (
                 <div
                   key={l.id}
-                  draggable
+                  data-testid="lead-card"
+                  draggable={leadControls(access, l).edit}
                   onDragStart={(e) => {
                     e.dataTransfer.setData("text/plain", String(l.id));
                   }}
-                  className="bg-white/[0.03] border border-white/10 rounded-md p-2.5 cursor-grab active:cursor-grabbing hover:bg-white/[0.06] transition-colors"
+                  className={cn(
+                    "bg-white/[0.03] border border-white/10 rounded-md p-2.5 hover:bg-white/[0.06] transition-colors",
+                    leadControls(access, l).edit && "cursor-grab active:cursor-grabbing",
+                  )}
                 >
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0 flex-1">
@@ -216,7 +228,7 @@ function Kanban({ leads, onConvert }: { leads: Lead[]; onConvert: (l: Lead) => v
                     <span className="text-[10px] text-white/40">
                       {l.ownerName.split(" ")[0]} · {formatRelative(l.updatedAt)}
                     </span>
-                    {l.status === "qualified" && (
+                    {l.status === "qualified" && leadControls(access, l).convert && (
                       <button
                         onClick={() => onConvert(l)}
                         className="inline-flex items-center gap-1 text-[10px] font-semibold text-[var(--color-primary)] hover:underline"
@@ -236,6 +248,7 @@ function Kanban({ leads, onConvert }: { leads: Lead[]; onConvert: (l: Lead) => v
 }
 
 function ListView({ leads, onConvert }: { leads: Lead[]; onConvert: (l: Lead) => void }) {
+  const access = useAccess();
   return (
     <div className="glass-panel overflow-hidden">
       <table className="w-full text-sm">
@@ -271,12 +284,21 @@ function ListView({ leads, onConvert }: { leads: Lead[]; onConvert: (l: Lead) =>
                   <StatusPill status={l.status} />
                 </td>
                 <td className="px-3 py-3 text-xs text-white/55">{SOURCE_LABEL[l.source]}</td>
-                <td className="px-3 py-3 text-xs text-white/65">{l.ownerName}</td>
+                <td className="px-3 py-3 text-xs text-white/65">
+                  <ReassignControl
+                    type="leads"
+                    recordId={l.id}
+                    ownerName={l.ownerName}
+                    ownerUserId={l.ownerUserId}
+                    canReassign={leadControls(access, l).reassign}
+                    invalidate={[["leads"]]}
+                  />
+                </td>
                 <td className="px-3 py-3 text-right text-xs font-mono tabular-nums text-[var(--color-primary)]">
                   {l.estimatedValue != null ? `$${l.estimatedValue.toLocaleString()}` : "—"}
                 </td>
                 <td className="px-3 py-3 text-right">
-                  {l.status === "qualified" && (
+                  {l.status === "qualified" && leadControls(access, l).convert && (
                     <button
                       onClick={() => onConvert(l)}
                       className="inline-flex items-center gap-1 text-xs font-semibold text-[var(--color-primary)] hover:underline"
@@ -320,13 +342,15 @@ function StatusPill({ status }: { status: LeadStatus }) {
 
 function ConvertModal({ lead, onClose }: { lead: Lead; onClose: () => void }) {
   const qc = useQueryClient();
+  // B4: the first Case is offered only to employees who may create cases.
+  const withCase = leadControls(useAccess(), lead).convertWithCase;
   const [accountName, setAccountName] = useState(lead.companyName ?? "");
   const [accountState, setAccountState] = useState(lead.intendedState ?? "");
   const [accountEntityType, setAccountEntityType] = useState(lead.intendedEntityType ?? "");
   const [contactTitle, setContactTitle] = useState("Founder");
   const [linkRole, setLinkRole] = useState("Sole Member");
   const [ownershipPct, setOwnershipPct] = useState<string>("100");
-  const [createInitialCase, setCreateInitialCase] = useState(true);
+  const [createInitialCase, setCreateInitialCase] = useState(withCase);
   const [initialCaseTitle, setInitialCaseTitle] = useState(
     lead.intendedState && lead.intendedEntityType
       ? `${lead.intendedState} ${lead.intendedEntityType} Formation — ${
@@ -434,7 +458,7 @@ function ConvertModal({ lead, onClose }: { lead: Lead; onClose: () => void }) {
           </div>
         </section>
 
-        <section className="space-y-2">
+        {withCase && <section className="space-y-2">
           <label className="inline-flex items-center gap-2 text-sm cursor-pointer">
             <input
               type="checkbox"
@@ -454,7 +478,7 @@ function ConvertModal({ lead, onClose }: { lead: Lead; onClose: () => void }) {
               />
             </div>
           )}
-        </section>
+        </section>}
 
         <div className="flex items-center gap-2 pt-2 border-t border-white/5">
           <Button

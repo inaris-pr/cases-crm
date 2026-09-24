@@ -20,6 +20,9 @@ import { Button } from "@/components/ui/Button";
 import { NewCaseDrawer } from "@/components/cases/NewCaseDrawer";
 
 import { recordsPath } from "@/lib/records";
+import { clientControls } from "@cases/access";
+import { useAccess } from "@/lib/useAccess";
+import { ReassignControl } from "@/components/ReassignControl";
 export function ContactDetail() {
   const params = useParams<{ id: string }>();
   const id = Number(params.id);
@@ -31,6 +34,7 @@ export function ContactDetail() {
   });
 
   const [newCaseOpen, setNewCaseOpen] = useState(false);
+  const access = useAccess();
 
   const c = contactQuery.data;
 
@@ -40,6 +44,9 @@ export function ContactDetail() {
   if (!c) {
     return <div className="text-white/40 text-sm">Contact not found.</div>;
   }
+
+  // RBAC Phase 5: no case information at all without cases.view.
+  const ctl = clientControls(access, c);
 
   return (
     <div className="space-y-5">
@@ -83,18 +90,18 @@ export function ContactDetail() {
               <span>Owned by {c.ownerName}</span>
             </div>
           </div>
-          <Button onClick={() => setNewCaseOpen(true)} className="shrink-0">
+          {ctl.createCase && (<Button onClick={() => setNewCaseOpen(true)} className="shrink-0">
             <Plus size={14} />
             New Case
-          </Button>
+          </Button>)}
         </div>
       </div>
 
-      <NewCaseDrawer
+      {ctl.createCase && (<NewCaseDrawer
         open={newCaseOpen}
         onClose={() => setNewCaseOpen(false)}
         context={{ kind: "client", contactId: c.id, contactName: c.fullName }}
-      />
+      />)}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         {/* Linked accounts */}
@@ -166,18 +173,30 @@ export function ContactDetail() {
             <Field k="Title" v={c.title ?? "—"} />
             <Field k="Email" v={c.email ?? "—"} />
             <Field k="Phone" v={c.phone ?? "—"} />
-            <Field k="Owner" v={c.ownerName} />
+            <Field
+              k="Owner"
+              v={
+                <ReassignControl
+                  type="contacts"
+                  recordId={c.id}
+                  ownerName={c.ownerName}
+                  ownerUserId={c.ownerUserId}
+                  canReassign={ctl.reassign}
+                  invalidate={[["contact", id], ["contacts"], ["clients"]]}
+                />
+              }
+            />
             <Field k="Created" v={formatDate(c.createdAt)} />
           </dl>
         </div>
       </div>
 
       {/* All cases across linked accounts */}
-      <div className="glass-panel p-0">
+      {ctl.viewCases && (<div className="glass-panel p-0">
         <div className="px-4 py-3 border-b border-white/5">
           <div className="label-eyebrow inline-flex items-center gap-1.5">
             <FolderKanban size={11} className="text-[var(--color-primary)]" />
-            Cases involving {c.firstName} ({c.cases.length})
+            Cases involving {c.firstName} ({(c.cases ?? []).length})
           </div>
         </div>
         <table className="w-full text-sm">
@@ -191,14 +210,14 @@ export function ContactDetail() {
             </tr>
           </thead>
           <tbody>
-            {c.cases.length === 0 ? (
+            {(c.cases ?? []).length === 0 ? (
               <tr>
                 <td colSpan={5} className="px-4 py-8 text-center text-white/40">
                   No cases yet.
                 </td>
               </tr>
             ) : (
-              c.cases.map((cs) => (
+              (c.cases ?? []).map((cs) => (
                 <tr key={cs.id} className="border-b border-white/5 hover:bg-white/[0.025]">
                   <td className="px-4 py-3">
                     <Link href={`/cases/${cs.id}`}>
@@ -225,7 +244,7 @@ export function ContactDetail() {
             )}
           </tbody>
         </table>
-      </div>
+      </div>)}
     </div>
   );
 }

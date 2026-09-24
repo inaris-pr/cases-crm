@@ -31,6 +31,8 @@ import { PriorityBadge } from "@/components/ui/Badge";
 import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/Button";
 import { CaseDetailModal } from "@/components/CaseDetailModal";
+import { can } from "@cases/access";
+import { useAuth } from "@/lib/auth";
 import { cn } from "@/lib/cn";
 import { initials, colorFromString } from "@/lib/format";
 import { accountCardLinks } from "@/lib/caseLinks";
@@ -65,6 +67,7 @@ interface Pos {
 
 export function CasesBoard() {
   const qc = useQueryClient();
+  const canCreateCase = can(useAuth().permissions, "cases.create");
   const customersQuery = useQuery({
     queryKey: ["customers"],
     queryFn: () => fetchJson<CustomerWithCounts[]>(API("/api/customers")),
@@ -317,8 +320,8 @@ export function CasesBoard() {
             />
           )}
 
-          {/* Floating + button next to the client */}
-          {customer && (
+          {/* Floating + button next to the client (needs cases.create) */}
+          {customer && canCreateCase && (
             <button
               onClick={(e) => {
                 e.stopPropagation();

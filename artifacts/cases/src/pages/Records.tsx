@@ -1,6 +1,8 @@
 import { Link, Redirect, useParams } from "wouter";
 import { Building2, Users, FolderKanban } from "lucide-react";
 import { cn } from "@/lib/cn";
+import { visibleRecordsTabs } from "@cases/access";
+import { useAuth } from "@/lib/auth";
 import {
   RECORDS_TABS,
   RECORDS_TAB_LABELS,
@@ -32,8 +34,15 @@ const TAB_ICONS: Record<RecordsTab, typeof Building2> = {
  */
 export function Records() {
   const { tab } = useParams<{ tab?: string }>();
+  const { permissions } = useAuth();
+  // Only the tabs this employee may open (RBAC Phase 5). The route guard has
+  // already refused a forbidden tab in the URL before this page mounts.
+  const allowed = new Set(visibleRecordsTabs(permissions));
+  const tabs = RECORDS_TABS.filter((t) => allowed.has(t));
 
-  if (!isRecordsTab(tab)) return <Redirect to={recordsPath()} replace />;
+  if (!isRecordsTab(tab) || !allowed.has(tab)) {
+    return tabs[0] ? <Redirect to={recordsPath(tabs[0])} replace /> : null;
+  }
 
   return (
     <div className="space-y-4">
@@ -41,12 +50,13 @@ export function Records() {
         aria-label="Records"
         className="flex items-center gap-1 border-b border-white/5 overflow-x-auto"
       >
-        {RECORDS_TABS.map((t) => {
+        {tabs.map((t) => {
           const Icon = TAB_ICONS[t];
           const active = t === tab;
           return (
             <Link
               key={t}
+              data-testid={`records-tab-${t}`}
               href={recordsPath(t)}
               aria-current={active ? "page" : undefined}
               className={cn(

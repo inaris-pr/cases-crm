@@ -6,8 +6,12 @@ import { API, fetchJson } from "@/lib/api";
 import type { AccountWithCounts } from "@/lib/api";
 import { Input } from "@/components/ui/Input";
 import { cn } from "@/lib/cn";
+import { can } from "@cases/access";
+import { useAuth } from "@/lib/auth";
 
 export function Accounts() {
+  // Case counts only for employees who can view cases (RBAC Phase 5).
+  const showCases = can(useAuth().permissions, "cases.view");
   const [, navigate] = useLocation();
   const [search, setSearch] = useState("");
   const [ownerFilter, setOwnerFilter] = useState<string>("");
@@ -32,7 +36,7 @@ export function Accounts() {
   const totals = useMemo(
     () => ({
       total: rows.length,
-      open: rows.reduce((s, r) => s + r.openCaseCount, 0),
+      open: rows.reduce((s, r) => s + (r.openCaseCount ?? 0), 0),
       contacts: rows.reduce((s, r) => s + r.contactCount, 0),
     }),
     [rows],
@@ -48,7 +52,7 @@ export function Accounts() {
         <div className="flex items-center gap-2">
           <Stat label="Accounts" value={totals.total} />
           <Stat label="Contacts" value={totals.contacts} />
-          <Stat label="Open cases" value={totals.open} />
+          {showCases && <Stat label="Open cases" value={totals.open} />}
         </div>
       </div>
 
@@ -86,7 +90,7 @@ export function Accounts() {
               <th className="px-3 py-2.5">Industry</th>
               <th className="px-3 py-2.5">Owner</th>
               <th className="px-3 py-2.5 text-right">Contacts</th>
-              <th className="px-3 py-2.5 text-right">Cases</th>
+              {showCases && <th className="px-3 py-2.5 text-right">Cases</th>}
             </tr>
           </thead>
           <tbody>
@@ -121,7 +125,7 @@ export function Accounts() {
                     {a.contactCount}
                   </span>
                 </td>
-                <td className="px-3 py-2.5 text-right">
+                {showCases && (<td className="px-3 py-2.5 text-right">
                   <span
                     className={cn(
                       "inline-flex items-center gap-1 text-xs",
@@ -131,7 +135,7 @@ export function Accounts() {
                     <FolderKanban size={11} />
                     {a.openCaseCount} / {a.caseCount}
                   </span>
-                </td>
+                </td>)}
               </tr>
             ))}
           </tbody>

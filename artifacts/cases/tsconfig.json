@@ -6,8 +6,8 @@
     "baseUrl": ".",
     "paths": {
       "@/*": ["src/*"],
-      // Shared permission model (lib/access). Type-only imports for now; a
-      // Vite resolve.alias is added when runtime code first uses it (Phase 5).
+      // Shared permission model (lib/access); vite.config.ts has the
+      // matching resolve.alias for runtime imports.
       "@cases/access": ["../../lib/access/src/index.ts"]
     },
     "outDir": "dist"

@@ -161,7 +161,8 @@ describe("the web app uses these rules", () => {
   it("sign-in, reload and sign-out go through lib/session", () => {
     expect(auth).toMatch(/beginSession\(effects, user, permissions\)/);
     expect(auth).toMatch(/resumeSession\(effects, me\.user/);
-    expect(auth).toMatch(/endSession\(effects, \{\}\)/);
+    expect(auth).toMatch(/endSession\(effects, NO_ACCESS\)/);
+    expect(auth).toMatch(/const NO_ACCESS: AccessGrant = \{ permissions: \{\}, supervisedUserIds: \[\] \}/);
     expect(auth).toMatch(/navigate\(path, \{ replace: true \}\)/);
     expect(auth).toMatch(/qc\.clear\(\)/);
   });

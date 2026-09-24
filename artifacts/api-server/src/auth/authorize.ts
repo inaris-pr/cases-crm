@@ -23,10 +23,10 @@
 import type { NextFunction, Request, RequestHandler, Response } from "express";
 import {
   canAny,
+  canOnOwner,
+  ownerInScope as sharedOwnerInScope,
   resolvePermissions,
-  scopeOf,
-  can,
-  isScoped,
+  type AccessContext,
   type EffectivePermissions,
   type Permission,
   type Scope,
@@ -77,12 +77,17 @@ export function ownerUserFor(ownerUserId: number | null | undefined): User | nul
   return store.users.find((u) => u.id === ownerUserId) ?? null;
 }
 
-/** Whether a record owned by employee `ownerUserId` falls inside `scope` for `p`. */
+/** The principal as lib/access's AccessContext (the shared scope evaluator). */
+export function accessContextOf(p: Principal): AccessContext {
+  return { userId: p.user.id, permissions: p.permissions, supervisedUserIds: p.supervisedUserIds };
+}
+
+/**
+ * Whether a record owned by employee `ownerUserId` falls inside `scope` for
+ * `p`. Delegates to lib/access, which the web app uses too.
+ */
 export function ownerInScope(p: Principal, scope: Scope, ownerUserId: number | null | undefined): boolean {
-  if (scope === "all") return true;
-  if (ownerUserId == null) return false;
-  if (ownerUserId === p.user.id) return true; // own
-  return scope === "team" && p.supervisedUserIds.has(ownerUserId);
+  return sharedOwnerInScope(accessContextOf(p), scope, ownerUserId);
 }
 
 /**
@@ -90,9 +95,7 @@ export function ownerInScope(p: Principal, scope: Scope, ownerUserId: number | n
  * Unscoped permissions ignore the owner.
  */
 export function canOn(p: Principal, permission: Permission, ownerUserId: number | null | undefined): boolean {
-  if (!isScoped(permission)) return can(p.permissions, permission);
-  const scope = scopeOf(p.permissions, permission);
-  return scope !== null && ownerInScope(p, scope, ownerUserId);
+  return canOnOwner(accessContextOf(p), permission, ownerUserId);
 }
 
 /** The rows `p` may use `permission` on. */

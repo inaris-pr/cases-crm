@@ -30,6 +30,8 @@ import { formatDate } from "@/lib/format";
 import { cn } from "@/lib/cn";
 import { CasesBoard } from "./CasesBoard";
 import { NewCaseDrawer } from "@/components/cases/NewCaseDrawer";
+import { can } from "@cases/access";
+import { useAuth } from "@/lib/auth";
 import {
   CASE_SORT_LABELS,
   DEFAULT_CASE_SORT,
@@ -45,6 +47,7 @@ type View = "table" | "cards" | "board";
 
 export function CasesList() {
   const [, navigate] = useLocation();
+  const canCreateCase = can(useAuth().permissions, "cases.create");
   const [view, setView] = useState<View>("table");
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState<CaseStatus | "">("");
@@ -102,7 +105,7 @@ export function CasesList() {
             <ViewBtn active={view === "cards"} onClick={() => setView("cards")} icon={LayoutGrid} label="Cards" />
             <ViewBtn active={view === "board"} onClick={() => setView("board")} icon={FolderKanban} label="Board" />
           </div>
-          {view !== "board" && (
+          {view !== "board" && canCreateCase && (
             <Button onClick={() => openNewCase()}>
               <Plus size={14} />
               New case
@@ -136,10 +139,12 @@ export function CasesList() {
                   title="No cases found"
                   description="Try clearing your filters, or create a new case to get started."
                   cta={
-                    <Button onClick={() => openNewCase()}>
-                      <Plus size={14} />
-                      New case
-                    </Button>
+                    canCreateCase ? (
+                      <Button onClick={() => openNewCase()}>
+                        <Plus size={14} />
+                        New case
+                      </Button>
+                    ) : undefined
                   }
                 />
               ) : (
@@ -421,6 +426,7 @@ function CardsView({
   cases: CaseWithCustomer[];
   onNew: () => void;
 }) {
+  const canCreateCase = can(useAuth().permissions, "cases.create");
   if (cases.length === 0) {
     return (
       <div className="glass-panel">
@@ -429,10 +435,12 @@ function CardsView({
           title="No cases found"
           description="Try clearing your filters, or create a new case to get started."
           cta={
-            <Button onClick={onNew}>
-              <Plus size={14} />
-              New case
-            </Button>
+            canCreateCase ? (
+              <Button onClick={onNew}>
+                <Plus size={14} />
+                New case
+              </Button>
+            ) : undefined
           }
         />
       </div>

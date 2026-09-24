@@ -39,6 +39,10 @@ export interface CaseAutomationsTabProps {
    * to guard tab switches; the component guards page unload itself.
    */
   onDirtyChange?: (dirty: boolean) => void;
+  /** automations.edit on this case (its owner's scope): case automations. */
+  canEdit?: boolean;
+  /** automations.manage_global: create, edit, promote and delete globals. */
+  canManageGlobal?: boolean;
 }
 
 /**
@@ -50,7 +54,14 @@ export interface CaseAutomationsTabProps {
  * Scope actions (Apply to all cases, Customize for this case, Revert to global)
  * arrive in a later stage; a selected global is read-only here and says so.
  */
-export function CaseAutomationsTab({ caseId, onDirtyChange }: CaseAutomationsTabProps) {
+export function CaseAutomationsTab({
+  caseId,
+  onDirtyChange,
+  canEdit = false,
+  canManageGlobal = false,
+}: CaseAutomationsTabProps) {
+  // RBAC Phase 5: controls appear only when the API would accept them.
+  const canCreate = canEdit || canManageGlobal;
   const qc = useQueryClient();
   const builderRef = useRef<AutomationBuilderHandle>(null);
 
@@ -60,7 +71,7 @@ export function CaseAutomationsTab({ caseId, onDirtyChange }: CaseAutomationsTab
   const [running, setRunning] = useState(false);
   const [newOpen, setNewOpen] = useState(false);
   const [newName, setNewName] = useState("");
-  const [newScope, setNewScope] = useState<AutomationScope>("case");
+  const [newScope, setNewScope] = useState<AutomationScope>(canEdit ? "case" : "global");
   const [confirmGlobal, setConfirmGlobal] = useState(false);
   const [confirmSaveOpen, setConfirmSaveOpen] = useState(false);
   const [confirmPromoteOpen, setConfirmPromoteOpen] = useState(false);
@@ -176,7 +187,7 @@ export function CaseAutomationsTab({ caseId, onDirtyChange }: CaseAutomationsTab
   function closeNew() {
     setNewOpen(false);
     setNewName("");
-    setNewScope("case");
+    setNewScope(canEdit ? "case" : "global");
     setConfirmGlobal(false);
   }
 
@@ -325,7 +336,9 @@ export function CaseAutomationsTab({ caseId, onDirtyChange }: CaseAutomationsTab
     newNameTrimmed.length > 0 &&
     automations.some((a) => a.name.trim().toLowerCase() === newNameTrimmed.toLowerCase());
 
-  const canSave = dirty && !nameError && !save.isPending;
+  /** May this employee change the selected automation? */
+  const canEditSelected = isGlobal ? canManageGlobal : canEdit;
+  const canSave = canEditSelected && dirty && !nameError && !save.isPending;
 
   return (
     <div className="space-y-3">
@@ -347,10 +360,10 @@ export function CaseAutomationsTab({ caseId, onDirtyChange }: CaseAutomationsTab
         )}
 
         <div className="ml-auto flex items-center gap-2">
-          <Button variant="secondary" onClick={() => setNewOpen(true)}>
+          {canCreate && (<Button variant="secondary" onClick={() => setNewOpen(true)}>
             <Plus size={14} />
             New
-          </Button>
+          </Button>)}
           <Button
             variant="secondary"
             onClick={() => {
@@ -371,18 +384,18 @@ export function CaseAutomationsTab({ caseId, onDirtyChange }: CaseAutomationsTab
             <Move size={14} />
             Reset view
           </Button>
-          <Button
+          {canEditSelected && (<Button
             variant="outline"
             onClick={() => draft && setDraft({ ...draft, graph: { ...draft.graph, nodes: [], edges: [] } })}
             disabled={!draft}
           >
             <Trash2 size={14} />
             Clear
-          </Button>
-          <Button onClick={requestSave} disabled={!canSave}>
+          </Button>)}
+          {canEditSelected && (<Button onClick={requestSave} disabled={!canSave}>
             <Save size={14} />
             {save.isPending ? "Saving…" : "Save"}
-          </Button>
+          </Button>)}
         </div>
       </div>
 
@@ -395,9 +408,9 @@ export function CaseAutomationsTab({ caseId, onDirtyChange }: CaseAutomationsTab
               This automation is shared with every case.
             </span>{" "}
             <span className="text-white/60">
-              You can edit it here, and saving asks you to confirm first because the change
-              reaches every case using it. Cases that have customized their own copy are not
-              affected.
+              {canManageGlobal
+                ? "You can edit it here, and saving asks you to confirm first because the change reaches every case using it. Cases that have customized their own copy are not affected."
+                : "Only employees who manage global automations can change it."}
             </span>
           </div>
         </div>
@@ -411,7 +424,8 @@ export function CaseAutomationsTab({ caseId, onDirtyChange }: CaseAutomationsTab
             <Input
               value={draft.name}
               maxLength={NAME_MAX + 20}
-              onChange={(e) => setDraft({ ...draft, name: e.target.value })}
+              readOnly={!canEditSelected}
+              onChange={(e) => canEditSelected && setDraft({ ...draft, name: e.target.value })}
               placeholder="e.g. Renewal reminder"
             />
             {nameError && (
@@ -441,7 +455,7 @@ export function CaseAutomationsTab({ caseId, onDirtyChange }: CaseAutomationsTab
               edits — save or discard first. */}
           {selectedSummary && (
             <div className="ml-auto flex items-center gap-2 pt-5 flex-wrap">
-              {isPlainCaseAutomation && (
+              {isPlainCaseAutomation && canManageGlobal && canEdit && (
                 <Button
                   variant="secondary"
                   size="sm"
@@ -453,7 +467,7 @@ export function CaseAutomationsTab({ caseId, onDirtyChange }: CaseAutomationsTab
                   Apply to all cases
                 </Button>
               )}
-              {isGlobal && (
+              {isGlobal && canEdit && (
                 <Button
                   variant="secondary"
                   size="sm"
@@ -465,7 +479,7 @@ export function CaseAutomationsTab({ caseId, onDirtyChange }: CaseAutomationsTab
                   {customize.isPending ? "Customizing…" : "Customize for this case"}
                 </Button>
               )}
-              {isCustomized && (
+              {isCustomized && canEdit && (
                 <Button
                   variant="secondary"
                   size="sm"
@@ -477,7 +491,7 @@ export function CaseAutomationsTab({ caseId, onDirtyChange }: CaseAutomationsTab
                   Revert to global
                 </Button>
               )}
-              <Button
+              {canEditSelected && (<Button
                 variant="danger"
                 size="sm"
                 onClick={() => {
@@ -488,7 +502,7 @@ export function CaseAutomationsTab({ caseId, onDirtyChange }: CaseAutomationsTab
               >
                 <Trash2 size={13} />
                 Delete
-              </Button>
+              </Button>)}
             </div>
           )}
         </div>
@@ -509,17 +523,19 @@ export function CaseAutomationsTab({ caseId, onDirtyChange }: CaseAutomationsTab
           title="No automations yet"
           description="Create one for this case, or apply an automation to every case from another case."
           cta={
-            <Button onClick={() => setNewOpen(true)}>
-              <Plus size={14} />
-              New automation
-            </Button>
+            canCreate ? (
+              <Button onClick={() => setNewOpen(true)}>
+                <Plus size={14} />
+                New automation
+              </Button>
+            ) : undefined
           }
         />
       ) : draft ? (
         <AutomationBuilder
           ref={builderRef}
           value={draft.graph}
-          onChange={(graph) => setDraft({ ...draft, graph })}
+          onChange={(graph) => canEditSelected && setDraft({ ...draft, graph })}
           running={running}
           className="h-[560px]"
         />
@@ -585,20 +601,20 @@ export function CaseAutomationsTab({ caseId, onDirtyChange }: CaseAutomationsTab
             <div>
               <Label>Apply this automation to</Label>
               <div className="space-y-2">
-                <ScopeCard
+                {canEdit && (<ScopeCard
                   selected={newScope === "case"}
                   onSelect={() => setNewScope("case")}
                   icon={Building2}
                   title="This case only"
                   description="Only available for this case."
-                />
-                <ScopeCard
+                />)}
+                {canManageGlobal && (<ScopeCard
                   selected={newScope === "global"}
                   onSelect={() => setNewScope("global")}
                   icon={Globe}
                   title="All cases"
                   description="Available to every existing case, and automatically to every future case."
-                />
+                />)}
               </div>
             </div>
 

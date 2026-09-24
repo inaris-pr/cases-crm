@@ -14,33 +14,60 @@ import {
   LogOut,
   UserCircle2,
   Sparkles,
+  MessagesSquare,
+  BookOpen,
 } from "lucide-react";
+import { visibleNavItems, type NavItem as AccessNavItem } from "@cases/access";
 import { cn } from "@/lib/cn";
 import { useAuth } from "@/lib/auth";
 import { Avatar } from "@/components/ui/Avatar";
-import { isRecordsLocation, recordsPath } from "@/lib/records";
+import { isRecordsLocation } from "@/lib/records";
 
 interface NavItem {
+  id: AccessNavItem["id"];
   label: string;
   href: string;
+  external?: boolean;
   icon: typeof LayoutDashboard;
   /** Overrides prefix matching when a section spans several URL roots. */
   isActive?: (location: string) => boolean;
 }
 
-const NAV: NavItem[] = [
-  { label: "Dashboard", href: "/", icon: LayoutDashboard },
-  { label: "Leads", href: "/leads", icon: Sparkles },
-  // Accounts, Clients and Cases are tabs of Records. Stay lit on their detail
-  // pages too, which keep their own /accounts/:id, /clients/:id, /cases/:id URLs.
-  { label: "Records", href: recordsPath(), icon: Layers, isActive: isRecordsLocation },
-  { label: "Accounting", href: "/accounting", icon: Calculator },
-  { label: "Insights", href: "/insights", icon: LineChart },
-  { label: "Settings", href: "/settings", icon: SettingsIcon },
-];
+const ICONS: Record<AccessNavItem["id"], typeof LayoutDashboard> = {
+  dashboard: LayoutDashboard,
+  leads: Sparkles,
+  records: Layers,
+  insights: LineChart,
+  messages: MessagesSquare,
+  knowledge: BookOpen,
+  accounting: Calculator,
+  settings: SettingsIcon,
+};
+
+/** The Knowledge Base link (D12): shown only when its URL is configured. */
+const KNOWLEDGE_BASE_URL: string | null = import.meta.env.VITE_KNOWLEDGE_BASE_URL || null;
+
+/**
+ * The sidebar for these permissions (RBAC Phase 5): built only from
+ * lib/access's visibleNavItems, so anything the employee cannot use is
+ * absent. Records links to the first tab they may open.
+ */
+function navFor(permissions: Parameters<typeof visibleNavItems>[0]): NavItem[] {
+  return visibleNavItems(permissions, { knowledgeBaseUrl: KNOWLEDGE_BASE_URL }).map((item) => ({
+    id: item.id,
+    label: item.label,
+    href: item.href ?? "/",
+    external: item.external,
+    icon: ICONS[item.id],
+    // Records stays lit on its detail pages (/accounts/:id, /clients/:id, /cases/:id).
+    isActive: item.id === "records" ? isRecordsLocation : undefined,
+  }));
+}
 
 export function Sidebar() {
   const [location] = useLocation();
+  const { permissions } = useAuth();
+  const NAV = navFor(permissions);
   const [pinned, setPinned] = useState(false);
   const [hovered, setHovered] = useState(false);
   const expanded = pinned || hovered;
@@ -88,11 +115,17 @@ export function Sidebar() {
           const Icon = item.icon;
           const isActive = item.isActive
             ? item.isActive(location)
-            : location === item.href ||
-              (item.href !== "/" && location.startsWith(item.href));
-          return (
-            <Link key={item.href} href={item.href}>
+            : !item.external &&
+              (location === item.href ||
+                (item.href !== "/" && location.startsWith(item.href)));
+          const linkProps = item.external
+            ? { href: item.href, target: "_blank", rel: "noopener noreferrer" }
+            : {};
+          const anchor = (
               <a
+                {...linkProps}
+                data-testid={`nav-${item.id}`}
+                aria-label={item.label}
                 className={cn(
                   "group relative flex items-center gap-3 h-10 px-3 rounded-lg text-sm transition-all",
                   isActive
@@ -127,6 +160,12 @@ export function Sidebar() {
                   ) : null}
                 </AnimatePresence>
               </a>
+          );
+          return item.external ? (
+            <span key={item.id}>{anchor}</span>
+          ) : (
+            <Link key={item.id} href={item.href}>
+              {anchor}
             </Link>
           );
         })}
@@ -150,7 +189,12 @@ function UserChip({ expanded }: { expanded: boolean }) {
   if (!user) return null;
   return (
     <div className="flex items-center gap-2 px-2 py-1.5 rounded-lg glass-soft">
-      <Avatar name={user.name} size={28} />
+      {/* Personal settings live here, not in the sidebar (R3). */}
+      <Link href="/account">
+        <a data-testid="nav-account" title="Your account" aria-label="Your account" className="shrink-0">
+          <Avatar name={user.name} size={28} />
+        </a>
+      </Link>
       <AnimatePresence>
         {expanded ? (
           <motion.div
@@ -171,6 +215,7 @@ function UserChip({ expanded }: { expanded: boolean }) {
       <button
         onClick={() => void logout()}
         title="Sign out"
+        data-testid="sign-out"
         className="size-7 grid place-items-center rounded-md text-white/50 hover:text-rose-300 hover:bg-rose-500/10 shrink-0"
       >
         <LogOut size={13} />

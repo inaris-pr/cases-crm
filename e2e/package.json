@@ -1,0 +1,12 @@
+{
+  "name": "cases-e2e",
+  "private": true,
+  "type": "module",
+  "description": "Targeted Playwright RBAC browser suite (outside the pnpm workspace on purpose).",
+  "scripts": {
+    "test": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.56.1"
+  }
+}

@@ -12,7 +12,8 @@
     "test": "pnpm -r run test",
     "api:generate": "pnpm --filter @cases/api-client-react generate",
     "lint": "echo 'no-op'",
-    "typecheck": "pnpm -r run typecheck"
+    "typecheck": "pnpm -r run typecheck",
+    "test:e2e": "npm --prefix e2e install --no-package-lock --no-audit --no-fund && npm --prefix e2e test"
   },
   "devDependencies": {
     "typescript": "^5.6.3"

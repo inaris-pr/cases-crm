@@ -17,6 +17,7 @@ import { Avatar } from "@/components/ui/Avatar";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { formatRelative } from "@/lib/format";
+import { can } from "@cases/access";
 import { cn } from "@/lib/cn";
 import { useAuth } from "@/lib/auth";
 import { MY_NAME } from "@/components/layout/MessagesWidget";
@@ -34,6 +35,8 @@ export function Messages() {
   const [composerMembers, setComposerMembers] = useState("");
 
   const qc = useQueryClient();
+  // Only employees who can view cases can tag them (RBAC Phase 5).
+  const canTagCases = can(useAuth().permissions, "cases.view");
   const convosQuery = useQuery({
     queryKey: ["conversations"],
     queryFn: () => fetchJson<Conversation[]>(API("/api/conversations")),
@@ -49,7 +52,7 @@ export function Messages() {
   const casesQuery = useQuery({
     queryKey: ["cases", "for-tagging"],
     queryFn: () => fetchJson<Case[]>(API("/api/cases")),
-    enabled: showCasePicker,
+    enabled: showCasePicker && canTagCases,
   });
 
   const send = useMutation({
@@ -262,7 +265,7 @@ export function Messages() {
                   </div>
                 )}
                 <div className="flex items-end gap-2">
-                  <div className="relative">
+                  {canTagCases && (<div className="relative">
                     <button
                       onClick={() => setShowCasePicker(!showCasePicker)}
                       className="size-10 grid place-items-center rounded-md bg-white/5 hover:bg-white/10 text-white/60"
@@ -294,7 +297,7 @@ export function Messages() {
                         })}
                       </div>
                     )}
-                  </div>
+                  </div>)}
                   <textarea
                     value={input}
                     onChange={(e) => setInput(e.target.value)}

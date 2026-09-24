@@ -44,6 +44,9 @@ import { Modal } from "@/components/ui/Modal";
 import { CaseAutomationsTab } from "@/components/automations/CaseAutomationsTab";
 import { MentionBody, MentionTextarea } from "@/components/MentionInput";
 import { useMyName } from "@/lib/auth";
+import { useAccess } from "@/lib/useAccess";
+import { caseControls, type CaseControls } from "@cases/access";
+import { ReassignControl } from "@/components/ReassignControl";
 import { cn } from "@/lib/cn";
 import { formatDate, formatBytes, formatRelative } from "@/lib/format";
 
@@ -77,6 +80,7 @@ export function CaseDetail() {
   const params = useParams();
   const id = Number(params.id);
   const qc = useQueryClient();
+  const access = useAccess();
   const [tab, setTab] = useState<Tab>(initialTabFromHash);
   const [editing, setEditing] = useState(false);
 
@@ -149,6 +153,8 @@ export function CaseDetail() {
     return <div className="text-sm text-white/40 py-12 text-center">Case not found.</div>;
 
   const c = caseQ.data;
+  // What this employee may do on THIS case (RBAC Phase 5; the API decides too).
+  const ctl = caseControls(access, c);
 
   return (
     <div className="space-y-4">
@@ -176,7 +182,7 @@ export function CaseDetail() {
               className="!text-[10px] !px-2 !py-0.5 uppercase tracking-wider"
             />
           </div>
-          {editing ? (
+          {editing && ctl.edit ? (
             <Input
               value={c.title}
               autoFocus
@@ -190,7 +196,7 @@ export function CaseDetail() {
             <h1 className="text-2xl font-bold tracking-tight">{c.title}</h1>
           )}
         </div>
-        <button
+        {ctl.edit && (<button
           onClick={() => setEditing(!editing)}
           className={cn(
             "size-8 grid place-items-center rounded-lg border transition-colors",
@@ -202,7 +208,7 @@ export function CaseDetail() {
           title={editing ? "Done editing" : "Edit case"}
         >
           {editing ? <Check size={13} /> : <PencilLine size={13} />}
-        </button>
+        </button>)}
       </div>
 
       {/* Tabs */}
@@ -246,7 +252,7 @@ export function CaseDetail() {
           {tab === "overview" && (
             <OverviewTab
               caseDetail={c}
-              editing={editing}
+              editing={editing && ctl.edit}
               onSave={(body) => patchCase.mutate(body)}
             />
           )}
@@ -255,6 +261,7 @@ export function CaseDetail() {
               caseId={c.id}
               contacts={contactsQ.data ?? []}
               loading={contactsQ.isLoading}
+              canWork={ctl.work}
             />
           )}
           {tab === "thread" && (
@@ -262,19 +269,30 @@ export function CaseDetail() {
               caseId={c.id}
               entries={threadQ.data ?? []}
               loading={threadQ.isLoading}
+              canWork={ctl.work}
             />
           )}
-          {tab === "tasks" && <TasksTab caseDetail={c} />}
-          {tab === "documents" && <DocumentsTab caseDetail={c} />}
+          {tab === "tasks" && <TasksTab caseDetail={c} canWork={ctl.work} />}
+          {tab === "documents" && <DocumentsTab caseDetail={c} canWork={ctl.work} />}
           {tab === "automations" && (
-            <CaseAutomationsTab caseId={c.id} onDirtyChange={setAutomationsDirty} />
+            <CaseAutomationsTab
+              caseId={c.id}
+              onDirtyChange={setAutomationsDirty}
+              canEdit={ctl.editAutomations}
+              canManageGlobal={ctl.manageGlobalAutomations}
+            />
           )}
         </div>
 
         {/* Details sidebar — every tab except the automation workspace. */}
         {tab !== "automations" && (
           <div className="lg:col-span-1">
-            <DetailsCard caseDetail={c} onChangeStatus={(s) => patchCase.mutate({ status: s })} onChangePriority={(p) => patchCase.mutate({ priority: p })} />
+            <DetailsCard
+              caseDetail={c}
+              controls={ctl}
+              onChangeStatus={(s) => patchCase.mutate({ status: s })}
+              onChangePriority={(p) => patchCase.mutate({ priority: p })}
+            />
           </div>
         )}
       </div>
@@ -454,10 +472,12 @@ function CaseRecordLinks({ caseDetail }: { caseDetail: CaseDetailType }) {
 // ── Details sidebar ─────────────────────────────────────────────────────────
 function DetailsCard({
   caseDetail,
+  controls,
   onChangeStatus,
   onChangePriority,
 }: {
   caseDetail: CaseDetailType;
+  controls: CaseControls;
   onChangeStatus: (s: CaseStatus) => void;
   onChangePriority: (p: CasePriority) => void;
 }) {
@@ -466,6 +486,18 @@ function DetailsCard({
       <div className="label-eyebrow">Details</div>
 
       <CaseRecordLinks caseDetail={caseDetail} />
+
+      <div>
+        <div className="text-xs text-white/50 mb-0.5">Owner</div>
+        <ReassignControl
+          type="cases"
+          recordId={caseDetail.id}
+          ownerName={caseDetail.ownerName}
+          ownerUserId={caseDetail.ownerUserId}
+          canReassign={controls.reassign}
+          invalidate={[["case", caseDetail.id], ["cases"]]}
+        />
+      </div>
 
       <div>
         <div className="text-xs text-white/50 mb-0.5">Created At</div>
@@ -481,6 +513,14 @@ function DetailsCard({
         </div>
       </div>
 
+      {/* Status and priority are edits (cases.edit); read-only otherwise. */}
+      {!controls.edit && (
+        <div className="border-t border-white/5 pt-4 flex items-center gap-2">
+          <StatusBadge status={caseDetail.status} />
+          <PriorityBadge priority={caseDetail.priority} />
+        </div>
+      )}
+      {controls.edit && (
       <div className="border-t border-white/5 pt-4 space-y-2.5">
         <div>
           <Label>Status</Label>
@@ -508,6 +548,7 @@ function DetailsCard({
           </Select>
         </div>
       </div>
+      )}
     </div>
   );
 }
@@ -517,10 +558,13 @@ function ContactsTab({
   caseId,
   contacts,
   loading,
+  canWork,
 }: {
   caseId: number;
   contacts: CaseContact[];
   loading: boolean;
+  /** Logging calls needs cases.work on this case. */
+  canWork: boolean;
 }) {
   const qc = useQueryClient();
   const MY_NAME = useMyName();
@@ -550,7 +594,7 @@ function ContactsTab({
 
   return (
     <div className="space-y-4">
-      <form
+      {canWork && (<form
         onSubmit={(e) => {
           e.preventDefault();
           if (contact.trim() && summary.trim()) log.mutate();
@@ -608,7 +652,7 @@ function ContactsTab({
             {log.isPending ? "Saving…" : "Log contact"}
           </Button>
         </div>
-      </form>
+      </form>)}
 
       {loading ? (
         <div className="text-sm text-white/40 text-center py-6">Loading contacts…</div>
@@ -675,10 +719,13 @@ function ThreadTab({
   caseId,
   entries,
   loading,
+  canWork,
 }: {
   caseId: number;
   entries: CaseThreadEntry[];
   loading: boolean;
+  /** Commenting needs cases.work on this case. */
+  canWork: boolean;
 }) {
   const qc = useQueryClient();
   const MY_NAME = useMyName();
@@ -699,7 +746,7 @@ function ThreadTab({
 
   return (
     <div className="space-y-4">
-      <form
+      {canWork && (<form
         onSubmit={(e) => {
           e.preventDefault();
           if (body.trim()) post.mutate();
@@ -722,7 +769,7 @@ function ThreadTab({
             {post.isPending ? "Posting…" : "Post"}
           </Button>
         </div>
-      </form>
+      </form>)}
 
       {loading ? (
         <div className="text-sm text-white/40 text-center py-6">Loading thread…</div>
@@ -764,7 +811,7 @@ function ThreadTab({
 }
 
 // ── Tasks ───────────────────────────────────────────────────────────────────
-function TasksTab({ caseDetail }: { caseDetail: CaseDetailType }) {
+function TasksTab({ caseDetail, canWork }: { caseDetail: CaseDetailType; canWork: boolean }) {
   const qc = useQueryClient();
   const [newTitle, setNewTitle] = useState("");
   const [dueDate, setDueDate] = useState("");
@@ -808,8 +855,9 @@ function TasksTab({ caseDetail }: { caseDetail: CaseDetailType }) {
         {caseDetail.tasks.map((t) => (
           <div key={t.id} className="flex items-center gap-3 p-3.5">
             <button
-              onClick={() => patch.mutate({ id: t.id, status: cycle(t.status) })}
-              className="text-white/50 hover:text-[var(--color-primary)]"
+              onClick={() => canWork && patch.mutate({ id: t.id, status: cycle(t.status) })}
+              disabled={!canWork}
+              className="text-white/50 hover:text-[var(--color-primary)] disabled:hover:text-white/50 disabled:cursor-default"
               aria-label="Cycle status"
             >
               {t.status === "completed" ? (
@@ -834,7 +882,7 @@ function TasksTab({ caseDetail }: { caseDetail: CaseDetailType }) {
         ))}
       </div>
 
-      <form
+      {canWork && (<form
         onSubmit={(e) => {
           e.preventDefault();
           if (newTitle.trim()) create.mutate();
@@ -857,13 +905,13 @@ function TasksTab({ caseDetail }: { caseDetail: CaseDetailType }) {
           <Plus size={13} />
           Add
         </Button>
-      </form>
+      </form>)}
     </div>
   );
 }
 
 // ── Documents ───────────────────────────────────────────────────────────────
-function DocumentsTab({ caseDetail }: { caseDetail: CaseDetailType }) {
+function DocumentsTab({ caseDetail, canWork }: { caseDetail: CaseDetailType; canWork: boolean }) {
   const qc = useQueryClient();
   const [filename, setFilename] = useState("");
   const [type, setType] = useState<DocumentType>("contract");
@@ -921,7 +969,7 @@ function DocumentsTab({ caseDetail }: { caseDetail: CaseDetailType }) {
           </a>
         ))}
       </div>
-      <form
+      {canWork && (<form
         onSubmit={(e) => {
           e.preventDefault();
           if (filename && url) create.mutate();
@@ -950,7 +998,7 @@ function DocumentsTab({ caseDetail }: { caseDetail: CaseDetailType }) {
           <Upload size={13} />
           Upload
         </Button>
-      </form>
+      </form>)}
     </div>
   );
 }

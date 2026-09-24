@@ -101,7 +101,8 @@ arrives with the role-based access phases.
 | `pnpm dev:api` | API only |
 | `pnpm dev:web` | Frontend only |
 | `pnpm typecheck` | TypeScript across the workspace — currently clean |
-| `pnpm test` | Test suite (Vitest + Supertest) — 515 tests in 39 files |
+| `pnpm test` | Test suite (Vitest + Supertest) — 536 tests in 40 files |
+| `pnpm test:e2e` | Playwright RBAC browser suite (e2e/) — 24 tests |
 | `pnpm build` | Production builds for everything |
 | `pnpm api:generate` | Orval regen — **don't**, the spec it reads is stale |
 
@@ -160,12 +161,8 @@ configuration change. Rewrite the schema first.
   sound local prototype, not production security — see CLAUDE_HANDOFF.md §6.6.
 - On first start after upgrading, an older `store.json` is migrated in place
   after a verified backup to `artifacts/api-server/data/backups/`.
-- Roles and permissions are defined in `lib/access`, reported by
-  `GET /api/auth/me` and **enforced by the API** (e.g. a CSR gets `403` on
-  every `/api/leads` request; sensitive Account fields are masked or omitted
-  by role). The web app does not adapt its navigation to roles yet, so a page
-  the role may not use shows an error instead of being hidden — that is the
-  next phase of the role-based access plan.
-- Record owners are employees by id. Changing an owner goes through
-  `PUT /api/<records>/:id/owner` with `{ ownerUserId }`; the Account page's
-  owner field cannot change the owner until the next phase adds that control.
+- Roles and permissions are defined in `lib/access`, enforced by the API and
+  reflected by the web app: each employee sees only the sidebar entries,
+  tabs, sections and buttons their role allows, and a forbidden URL shows a
+  "no access" page. Record owners are employees by id and change through the
+  Reassign control.

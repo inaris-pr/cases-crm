@@ -3,6 +3,8 @@ import { z } from "zod";
 import { authenticate, requireAuth, requireSameOrigin } from "./auth/middleware.js";
 import { publicUser } from "./auth/identity.js";
 import {
+  ASSIGN_PERMISSION,
+  OWNER_MUST_VIEW,
   accountFieldWritePermissions,
   can,
   redactAccount,
@@ -405,7 +407,14 @@ export function buildApiRouter(): Router {
         }));
       // Effective permissions from the shared role bundles (lib/access),
       // enforced by every route below (Phase 3).
-      res.json({ user: publicUser(user), teams, permissions: resolvePermissions(user.roles) });
+      res.json({
+        user: publicUser(user),
+        teams,
+        permissions: resolvePermissions(user.roles),
+        // Members of the teams this employee supervises: the web app needs
+        // them to evaluate "team" scope for controls (lib/access controls).
+        supervisedUserIds: [...supervisedMemberIds(user.id)].sort((a, b) => a - b),
+      });
     }),
   );
 
@@ -1346,6 +1355,29 @@ export function buildApiRouter(): Router {
   //     and be inside the caller's assign scope too (team scope never crosses
   //     teams; only "all" does)
   const ownerBody = z.object({ ownerUserId: z.number().int().positive() }).strict();
+
+  /**
+   * The employees the caller may make owner of a record of this type — the
+   * reassign picker (Phase 5). The same target rules as the PUT routes:
+   * active, able to view the record type, inside the caller's assign scope.
+   * (The PUT still checks the record's current owner and everything else.)
+   */
+  for (const type of ["cases", "leads", "accounts", "contacts"] as const) {
+    r.get(
+      `/owners/${type}/candidates`,
+      allow(ASSIGN_PERMISSION[type]),
+      asyncHandler(async (req, res) => {
+        const p = principalOf(req);
+        const assign = ASSIGN_PERMISSION[type];
+        const mustView = OWNER_MUST_VIEW[type];
+        const rows = activeEmployees()
+          .filter((u) => can(resolvePermissions(u.roles), mustView))
+          .filter((u) => canOn(p, assign, u.id))
+          .map((u) => ({ id: u.id, name: u.name }));
+        res.json(rows);
+      }),
+    );
+  }
 
   type Owned = { ownerUserId: number | null; ownerName: string };
 

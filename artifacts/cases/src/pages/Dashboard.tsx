@@ -21,7 +21,8 @@ import {
   Cell,
 } from "recharts";
 import { API, fetchJson } from "@/lib/api";
-import type { CaseWithCustomer, Stats, Task } from "@/lib/api";
+import type { CaseWithCustomer, Conversation, Lead, Mention, Stats, Task } from "@/lib/api";
+import { can } from "@cases/access";
 import { StatusBadge, PriorityBadge, TaskStatusBadge } from "@/components/ui/Badge";
 import { formatDate } from "@/lib/format";
 import { cn } from "@/lib/cn";
@@ -43,21 +44,34 @@ const STATUS_COLOR = {
   completed: "#ef4444",
 } as const;
 
+/**
+ * The Dashboard shows only what this employee's permissions cover (RBAC
+ * Phase 5, interim until the Phase 6 role dashboards): case metrics with
+ * metrics.cases, recent cases and tasks with cases.view. Employees with
+ * neither (Business Advisors, HR) get their greeting and their own real
+ * mentions, conversations and — with leads.view — recent leads. No
+ * placeholder numbers.
+ */
 export function Dashboard() {
+  const { user, permissions } = useAuth();
+  const showMetrics = can(permissions, "metrics.cases");
+  const showCases = can(permissions, "cases.view");
   const stats = useQuery({
     queryKey: ["stats"],
     queryFn: () => fetchJson<Stats>(API("/api/stats")),
+    enabled: showMetrics,
   });
   const recentCases = useQuery({
     queryKey: ["cases"],
     queryFn: () => fetchJson<CaseWithCustomer[]>(API("/api/cases")),
+    enabled: showCases,
   });
   const tasks = useQuery({
     queryKey: ["tasks"],
     queryFn: () => fetchJson<Task[]>(API("/api/tasks")),
+    enabled: showCases,
   });
 
-  const { user } = useAuth();
   const firstName = user?.name.split(" ")[0] ?? "there";
 
   const attention =
@@ -75,17 +89,19 @@ export function Dashboard() {
           <div className="label-eyebrow mb-1">{formatDate(new Date(), { weekday: "long", month: "long", day: "numeric" })}</div>
           <h1 className="text-xl font-bold tracking-tight">{greeting()}, {firstName}</h1>
           <p className="text-xs text-white/50 mt-0.5">
-            Here's what's happening across your cases today.
+            {showCases ? "Here's what's happening across your cases today." : "Here's what's new for you today."}
           </p>
         </div>
-        <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-[var(--color-primary)]/15 text-[var(--color-primary)] text-[11px] font-semibold border border-[var(--color-primary)]/30 neon-border">
+        {showCases && (<div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-[var(--color-primary)]/15 text-[var(--color-primary)] text-[11px] font-semibold border border-[var(--color-primary)]/30 neon-border">
           <Sparkles size={11} />
           {attention} task{attention === 1 ? "" : "s"} need attention
-        </div>
+        </div>)}
       </div>
 
+      {!showMetrics && !showCases && <PersonalFeed />}
+
       {/* KPI cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+      {showMetrics && (<div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
         <StatCard
           color="#3b82f6"
           label="Total cases"
@@ -110,10 +126,10 @@ export function Dashboard() {
           value={stats.data?.totalCustomers ?? 0}
           icon={Users}
         />
-      </div>
+      </div>)}
 
       {/* Charts */}
-      <div className="grid grid-cols-1 lg:grid-cols-5 gap-3">
+      {showMetrics && (<div className="grid grid-cols-1 lg:grid-cols-5 gap-3">
         <div className="lg:col-span-3 glass-panel p-4">
           <div className="flex items-center justify-between mb-3">
             <div>
@@ -189,10 +205,10 @@ export function Dashboard() {
             </ResponsiveContainer>
           </div>
         </div>
-      </div>
+      </div>)}
 
       {/* Recent + Open Tasks */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+      {showCases && (<div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
         <div className="glass-panel p-4">
           <div className="flex items-center justify-between mb-3">
             <h2 className="text-sm font-semibold">Recent cases</h2>
@@ -255,7 +271,7 @@ export function Dashboard() {
             )}
           </div>
         </div>
-      </div>
+      </div>)}
     </div>
   );
 }
@@ -305,5 +321,106 @@ function Legend({ color, label }: { color: string; label: string }) {
       <span className="size-2 rounded-full" style={{ background: color }} />
       {label}
     </span>
+  );
+}
+
+/**
+ * For employees without case access (Business Advisors, HR): their own real
+ * mentions and conversations, and recent leads with leads.view. Every item
+ * comes from an endpoint their permissions allow; nothing is invented.
+ */
+function PersonalFeed() {
+  const { user, permissions } = useAuth();
+  const showMessages = can(permissions, "messages.use");
+  const showLeads = can(permissions, "leads.view");
+  const mentions = useQuery({
+    queryKey: ["mentions", user?.name],
+    queryFn: () => fetchJson<Mention[]>(API("/api/mentions")),
+    enabled: showMessages,
+  });
+  const conversations = useQuery({
+    queryKey: ["conversations"],
+    queryFn: () => fetchJson<Conversation[]>(API("/api/conversations")),
+    enabled: showMessages,
+  });
+  const leads = useQuery({
+    queryKey: ["leads"],
+    queryFn: () => fetchJson<Lead[]>(API("/api/leads")),
+    enabled: showLeads,
+  });
+  return (
+    <div data-testid="dashboard-personal" className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+      {showLeads && (
+        <div className="glass-panel p-4" data-testid="dashboard-leads">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-sm font-semibold">Recent leads</h2>
+            <Link href="/leads">
+              <a className="text-xs text-[var(--color-primary)] inline-flex items-center gap-1 hover:underline">
+                View all <ArrowRight size={12} />
+              </a>
+            </Link>
+          </div>
+          <div className="space-y-1.5">
+            {(leads.data ?? []).slice(0, 5).map((l) => (
+              <Link key={l.id} href="/leads">
+                <a className="flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-white/5 transition-colors">
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-medium truncate">{l.firstName} {l.lastName}</div>
+                    <div className="text-xs text-white/40 truncate">{l.companyName ?? "—"}</div>
+                  </div>
+                  <span className="text-[10px] uppercase tracking-widest text-white/50">{l.status}</span>
+                </a>
+              </Link>
+            ))}
+            {leads.data && leads.data.length === 0 && (
+              <div className="text-xs text-white/40 py-6 text-center">No leads yet.</div>
+            )}
+          </div>
+        </div>
+      )}
+      {showMessages && (
+        <div className="glass-panel p-4" data-testid="dashboard-mentions">
+          <h2 className="text-sm font-semibold mb-3">Mentions</h2>
+          <div className="space-y-1.5">
+            {(mentions.data ?? []).slice(0, 5).map((m) => (
+              <div key={m.id} className="px-3 py-2.5 rounded-lg bg-white/[0.02]">
+                <div className="text-xs text-white/50">{m.fromName}</div>
+                <div className="text-sm truncate">{m.body}</div>
+              </div>
+            ))}
+            {mentions.data && mentions.data.length === 0 && (
+              <div className="text-xs text-white/40 py-6 text-center">No mentions.</div>
+            )}
+          </div>
+        </div>
+      )}
+      {showMessages && (
+        <div className="glass-panel p-4" data-testid="dashboard-conversations">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-sm font-semibold">Conversations</h2>
+            <Link href="/messages">
+              <a className="text-xs text-[var(--color-primary)] inline-flex items-center gap-1 hover:underline">
+                Open messages <ArrowRight size={12} />
+              </a>
+            </Link>
+          </div>
+          <div className="space-y-1.5">
+            {(conversations.data ?? []).slice(0, 5).map((c) => (
+              <Link key={c.id} href="/messages">
+                <a className="block px-3 py-2.5 rounded-lg hover:bg-white/5 transition-colors">
+                  <div className="text-sm font-medium truncate">
+                    {c.name ?? c.members.filter((n) => n !== user?.name).join(", ")}
+                  </div>
+                  <div className="text-xs text-white/40 truncate">{c.lastMessage ?? "No messages yet"}</div>
+                </a>
+              </Link>
+            ))}
+            {conversations.data && conversations.data.length === 0 && (
+              <div className="text-xs text-white/40 py-6 text-center">No conversations yet.</div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
   );
 }

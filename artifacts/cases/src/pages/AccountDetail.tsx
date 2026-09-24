@@ -20,6 +20,9 @@ import { formatDate } from "@/lib/format";
 import { cn } from "@/lib/cn";
 import { Button } from "@/components/ui/Button";
 import { NewCaseDrawer } from "@/components/cases/NewCaseDrawer";
+import { ReassignControl } from "@/components/ReassignControl";
+import { accountControls } from "@cases/access";
+import { useAccess } from "@/lib/useAccess";
 
 import { recordsPath } from "@/lib/records";
 type Tab = "details" | "contacts" | "cases";
@@ -66,6 +69,7 @@ export function AccountDetail() {
   const params = useParams<{ id: string }>();
   const id = Number(params.id);
   const qc = useQueryClient();
+  const access = useAccess();
   const [tab, setTab] = useState<Tab>("details");
   const [newCaseOpen, setNewCaseOpen] = useState(false);
 
@@ -104,6 +108,10 @@ export function AccountDetail() {
   }
 
   const primary = a.contacts.find((c) => c.link.isPrimary) ?? a.contacts[0] ?? null;
+  // RBAC Phase 5: which fields and actions this employee may use here. The
+  // API redacts sensitive fields (redactedFields) and rejects anything else.
+  const ctl = accountControls(access, a);
+  const redacted = new Set(a.redactedFields ?? []);
 
   return (
     <div className="space-y-4">
@@ -147,24 +155,24 @@ export function AccountDetail() {
             </div>
             <div className="mt-3 grid grid-cols-3 gap-2 max-w-md">
               <Metric label="Contacts" value={a.contactCount} />
-              <Metric label="Open cases" value={a.openCaseCount} />
-              <Metric label="Total cases" value={a.caseCount} />
+              {ctl.viewCases && <Metric label="Open cases" value={a.openCaseCount} />}
+              {ctl.viewCases && <Metric label="Total cases" value={a.caseCount} />}
             </div>
           </div>
-          <Button onClick={() => setNewCaseOpen(true)} className="shrink-0">
+          {ctl.createCase && (<Button onClick={() => setNewCaseOpen(true)} className="shrink-0">
             <Plus size={14} />
             New Case
-          </Button>
+          </Button>)}
         </div>
       </div>
 
-      <NewCaseDrawer
+      {ctl.createCase && (<NewCaseDrawer
         open={newCaseOpen}
         onClose={() => setNewCaseOpen(false)}
         context={{ kind: "account", accountId: a.id, accountName: a.name }}
         // Land on the Cases tab so the new case is visible straight away.
         onCreated={() => setTab("cases")}
-      />
+      />)}
 
       {/* Tabs */}
       <div className="flex items-center gap-0 border-b border-white/5">
@@ -174,9 +182,9 @@ export function AccountDetail() {
         <TabBtn active={tab === "contacts"} onClick={() => setTab("contacts")}>
           Contacts ({a.contacts.length})
         </TabBtn>
-        <TabBtn active={tab === "cases"} onClick={() => setTab("cases")}>
-          Cases ({a.cases.length})
-        </TabBtn>
+        {ctl.viewCases && (<TabBtn active={tab === "cases"} onClick={() => setTab("cases")}>
+          Cases ({a.cases?.length ?? 0})
+        </TabBtn>)}
       </div>
 
       {tab === "details" && (
@@ -184,19 +192,27 @@ export function AccountDetail() {
           <Section title="Account Information">
             <Grid>
               <Row label="Portal ID">
-                <EditableField value={a.portalId?.toString() ?? null} type="number" onSave={saveNumber("portalId")} />
+                <EditableField value={a.portalId?.toString() ?? null} type="number" readOnly={!ctl.canEditField("portalId")} onSave={saveNumber("portalId")} />
               </Row>
               <Row label="Account Owner">
-                <EditableField value={a.ownerName} onSave={save("ownerName")} />
+                {/* Ownership changes only through reassignment, by employee id. */}
+                <ReassignControl
+                  type="accounts"
+                  recordId={a.id}
+                  ownerName={a.ownerName}
+                  ownerUserId={a.ownerUserId}
+                  canReassign={ctl.reassign}
+                  invalidate={[["account", id], ["accounts"]]}
+                />
               </Row>
               <Row label="Account Name">
-                <EditableField value={a.name} onSave={save("name")} allowEmpty={false} />
+                <EditableField value={a.name} readOnly={!ctl.canEditField("name")} onSave={save("name")} allowEmpty={false} />
               </Row>
               <Row label="Archived">
-                <EditableCheckbox value={a.archived} onSave={saveBool("archived")} />
+                <EditableCheckbox value={a.archived} readOnly={!ctl.canEditField("archived")} onSave={saveBool("archived")} />
               </Row>
               <Row label="Old Company Name">
-                <EditableField value={a.oldCompanyName} onSave={save("oldCompanyName")} />
+                <EditableField value={a.oldCompanyName} readOnly={!ctl.canEditField("oldCompanyName")} onSave={save("oldCompanyName")} />
               </Row>
               <Row label="Primary Contact">
                 {primary ? (
@@ -210,7 +226,7 @@ export function AccountDetail() {
                 )}
               </Row>
               <Row label="Formation State">
-                <EditableField value={a.state} onSave={save("state")} />
+                <EditableField value={a.state} readOnly={!ctl.canEditField("state")} onSave={save("state")} />
               </Row>
               <Row label="Parent Account">
                 <span className="text-white/30 italic text-sm">—</span>
@@ -218,17 +234,17 @@ export function AccountDetail() {
               <Row label="Company Type">
                 <EditableField
                   value={a.entityType}
-                  onSave={save("entityType")}
+                  readOnly={!ctl.canEditField("entityType")} onSave={save("entityType")}
                   options={ENTITY_OPTIONS}
                 />
               </Row>
               <Row label="Company Phone">
-                <EditableField value={a.companyPhone} onSave={save("companyPhone")} type="tel" />
+                <EditableField value={a.companyPhone} readOnly={!ctl.canEditField("companyPhone")} onSave={save("companyPhone")} type="tel" />
               </Row>
               <Row label="Portal Link">
                 <EditableField
                   value={a.portalLink}
-                  onSave={save("portalLink")}
+                  readOnly={!ctl.canEditField("portalLink")} onSave={save("portalLink")}
                   displayValue={
                     a.portalLink ? (
                       <a
@@ -246,18 +262,18 @@ export function AccountDetail() {
                 />
               </Row>
               <Row label="Filing ID">
-                <EditableField value={a.filingId} onSave={save("filingId")} />
+                <EditableField value={a.filingId} readOnly={!ctl.canEditField("filingId")} onSave={save("filingId")} />
               </Row>
               <Row label="Brand">
-                <EditableField value={a.brand} onSave={save("brand")} />
+                <EditableField value={a.brand} readOnly={!ctl.canEditField("brand")} onSave={save("brand")} />
               </Row>
               <Row label="EIN">
-                <EditableField value={a.ein} onSave={save("ein")} placeholder="XX-XXXXXXX" />
+                {redacted.has("ein") ? <Restricted value={a.ein} /> : <EditableField value={a.ein} readOnly={!ctl.canEditField("ein")} onSave={save("ein")} placeholder="XX-XXXXXXX" />}
               </Row>
               <Row label="Subscription Bundle">
                 <EditableField
                   value={a.subscriptionBundle}
-                  onSave={save("subscriptionBundle")}
+                  readOnly={!ctl.canEditField("subscriptionBundle")} onSave={save("subscriptionBundle")}
                   options={[
                     { value: "Basic", label: "Basic" },
                     { value: "Standard", label: "Standard" },
@@ -268,18 +284,18 @@ export function AccountDetail() {
               <Row label="Formation Date">
                 <EditableField
                   value={a.formationDate ? a.formationDate.slice(0, 10) : null}
-                  onSave={save("formationDate")}
+                  readOnly={!ctl.canEditField("formationDate")} onSave={save("formationDate")}
                   type="date"
                   displayValue={a.formationDate ? formatDate(a.formationDate) : null}
                 />
               </Row>
               <Row label="FinCen Id">
-                <EditableField value={a.fincenId} onSave={save("fincenId")} />
+                {redacted.has("fincenId") ? <Restricted value={a.fincenId} /> : <EditableField value={a.fincenId} readOnly={!ctl.canEditField("fincenId")} onSave={save("fincenId")} />}
               </Row>
               <Row label="First Transaction Date">
                 <EditableField
                   value={a.firstTransactionDate ? a.firstTransactionDate.slice(0, 10) : null}
-                  onSave={save("firstTransactionDate")}
+                  readOnly={!ctl.canEditField("firstTransactionDate")} onSave={save("firstTransactionDate")}
                   type="date"
                   displayValue={
                     a.firstTransactionDate ? formatDate(a.firstTransactionDate) : null
@@ -289,15 +305,15 @@ export function AccountDetail() {
               <Row label="FinCen Filing Date">
                 <EditableField
                   value={a.fincenFilingDate ? a.fincenFilingDate.slice(0, 10) : null}
-                  onSave={save("fincenFilingDate")}
+                  readOnly={!ctl.canEditField("fincenFilingDate")} onSave={save("fincenFilingDate")}
                   type="date"
                   displayValue={a.fincenFilingDate ? formatDate(a.fincenFilingDate) : null}
                 />
               </Row>
               <Row label="Abandoned Cart URL">
-                <EditableField
+                {redacted.has("abandonedCartUrl") ? <Restricted value={a.abandonedCartUrl} /> : <EditableField
                   value={a.abandonedCartUrl}
-                  onSave={save("abandonedCartUrl")}
+                  readOnly={!ctl.canEditField("abandonedCartUrl")} onSave={save("abandonedCartUrl")}
                   displayValue={
                     a.abandonedCartUrl ? (
                       <a
@@ -311,46 +327,46 @@ export function AccountDetail() {
                       </a>
                     ) : null
                   }
-                />
+                />}
               </Row>
               <Row label="Formation Tier">
                 <EditableField
                   value={a.formationTier}
-                  onSave={save("formationTier")}
+                  readOnly={!ctl.canEditField("formationTier")} onSave={save("formationTier")}
                   options={TIER_OPTIONS}
                 />
               </Row>
               <Row label="Phone Forwarding Phone">
                 <EditableField
                   value={a.phoneForwardingPhone}
-                  onSave={save("phoneForwardingPhone")}
+                  readOnly={!ctl.canEditField("phoneForwardingPhone")} onSave={save("phoneForwardingPhone")}
                   type="tel"
                 />
               </Row>
               <Row label="Automation Status">
                 <EditableField
                   value={a.automationStatus}
-                  onSave={save("automationStatus")}
+                  readOnly={!ctl.canEditField("automationStatus")} onSave={save("automationStatus")}
                   options={AUTOMATION_OPTIONS}
                 />
               </Row>
               <Row label="VO Phone">
-                <EditableField value={a.voPhone} onSave={save("voPhone")} type="tel" />
+                <EditableField value={a.voPhone} readOnly={!ctl.canEditField("voPhone")} onSave={save("voPhone")} type="tel" />
               </Row>
               <Row label="Stripe ID">
-                <EditableField value={a.stripeId} onSave={save("stripeId")} />
+                {redacted.has("stripeId") ? <Restricted value={a.stripeId} /> : <EditableField value={a.stripeId} readOnly={!ctl.canEditField("stripeId")} onSave={save("stripeId")} />}
               </Row>
               <Row label="Is Formation Automated">
                 <EditableCheckbox
                   value={a.isFormationAutomated}
-                  onSave={saveBool("isFormationAutomated")}
+                  readOnly={!ctl.canEditField("isFormationAutomated")} onSave={saveBool("isFormationAutomated")}
                 />
               </Row>
               <Row label="Old Stripe IDs">
-                <EditableField value={a.oldStripeIds} onSave={save("oldStripeIds")} />
+                {redacted.has("oldStripeIds") ? <Restricted value={a.oldStripeIds} /> : <EditableField value={a.oldStripeIds} readOnly={!ctl.canEditField("oldStripeIds")} onSave={save("oldStripeIds")} />}
               </Row>
               <Row label="Share Type">
-                <EditableField value={a.shareType} onSave={save("shareType")} />
+                <EditableField value={a.shareType} readOnly={!ctl.canEditField("shareType")} onSave={save("shareType")} />
               </Row>
               <Row label="Created Date">
                 <span className="text-sm text-white/70">{formatDate(a.createdAt)}</span>
@@ -358,34 +374,34 @@ export function AccountDetail() {
               <Row label="Common Share Quantity">
                 <EditableField
                   value={a.commonShareQuantity?.toString() ?? null}
-                  onSave={saveNumber("commonShareQuantity")}
+                  readOnly={!ctl.canEditField("commonShareQuantity")} onSave={saveNumber("commonShareQuantity")}
                   type="number"
                 />
               </Row>
               <Row label="Formation Status">
-                <EditableField value={a.formationStatus} onSave={save("formationStatus")} />
+                <EditableField value={a.formationStatus} readOnly={!ctl.canEditField("formationStatus")} onSave={save("formationStatus")} />
               </Row>
               <Row label="Common Share Value">
                 <EditableField
                   value={a.commonShareValue?.toString() ?? null}
-                  onSave={saveNumber("commonShareValue")}
+                  readOnly={!ctl.canEditField("commonShareValue")} onSave={saveNumber("commonShareValue")}
                   type="number"
                 />
               </Row>
               <Row label="Industry">
-                <EditableField value={a.industry} onSave={save("industry")} />
+                <EditableField value={a.industry} readOnly={!ctl.canEditField("industry")} onSave={save("industry")} />
               </Row>
               <Row label="Preferred Share Quantity">
                 <EditableField
                   value={a.preferredShareQuantity?.toString() ?? null}
-                  onSave={saveNumber("preferredShareQuantity")}
+                  readOnly={!ctl.canEditField("preferredShareQuantity")} onSave={saveNumber("preferredShareQuantity")}
                   type="number"
                 />
               </Row>
               <Row label="Website">
                 <EditableField
                   value={a.website}
-                  onSave={save("website")}
+                  readOnly={!ctl.canEditField("website")} onSave={save("website")}
                   displayValue={
                     a.website ? (
                       <a
@@ -404,7 +420,7 @@ export function AccountDetail() {
               <Row label="Preferred Share Value">
                 <EditableField
                   value={a.preferredShareValue?.toString() ?? null}
-                  onSave={saveNumber("preferredShareValue")}
+                  readOnly={!ctl.canEditField("preferredShareValue")} onSave={saveNumber("preferredShareValue")}
                   type="number"
                 />
               </Row>
@@ -416,14 +432,14 @@ export function AccountDetail() {
               <Row label="Renewal Status">
                 <EditableField
                   value={a.renewalStatus}
-                  onSave={save("renewalStatus")}
+                  readOnly={!ctl.canEditField("renewalStatus")} onSave={save("renewalStatus")}
                   options={RENEWAL_STATUS_OPTIONS}
                 />
               </Row>
               <Row label="Renewal Date">
                 <EditableField
                   value={a.renewalDate ? a.renewalDate.slice(0, 10) : null}
-                  onSave={save("renewalDate")}
+                  readOnly={!ctl.canEditField("renewalDate")} onSave={save("renewalDate")}
                   type="date"
                   displayValue={a.renewalDate ? formatDate(a.renewalDate) : null}
                 />
@@ -436,11 +452,11 @@ export function AccountDetail() {
               <Row label="Principal Place of Business" labelWidth={210}>
                 <AddressBlock
                   value={a.principalAddress}
-                  onSave={saveAddress("principalAddress")}
+                  readOnly={!ctl.canEditField("principalAddress")} onSave={saveAddress("principalAddress")}
                 />
               </Row>
               <Row label="Mailing Address" labelWidth={210}>
-                <AddressBlock value={a.mailingAddress} onSave={saveAddress("mailingAddress")} />
+                <AddressBlock value={a.mailingAddress} readOnly={!ctl.canEditField("mailingAddress")} onSave={saveAddress("mailingAddress")} />
               </Row>
             </Grid>
           </Section>
@@ -448,19 +464,19 @@ export function AccountDetail() {
           <Section title="Banking Information">
             <Grid>
               <Row label="Banking App Id">
-                <EditableField value={a.bankingAppId} onSave={save("bankingAppId")} />
+                {redacted.has("bankingAppId") ? <Restricted value={a.bankingAppId} /> : <EditableField value={a.bankingAppId} readOnly={!ctl.canEditField("bankingAppId")} onSave={save("bankingAppId")} />}
               </Row>
               <Row label="Banking App Message">
-                <EditableField
+                {redacted.has("bankingAppMessage") ? <Restricted value={a.bankingAppMessage} /> : <EditableField
                   value={a.bankingAppMessage}
-                  onSave={save("bankingAppMessage")}
+                  readOnly={!ctl.canEditField("bankingAppMessage")} onSave={save("bankingAppMessage")}
                   type="textarea"
-                />
+                />}
               </Row>
               <Row label="Banking App Status">
                 <EditableField
                   value={a.bankingAppStatus}
-                  onSave={save("bankingAppStatus")}
+                  readOnly={!ctl.canEditField("bankingAppStatus")} onSave={save("bankingAppStatus")}
                   options={BANKING_STATUS_OPTIONS}
                   displayValue={
                     a.bankingAppStatus ? (
@@ -510,7 +526,7 @@ export function AccountDetail() {
       )}
 
       {tab === "contacts" && <ContactsTab account={a} />}
-      {tab === "cases" && <CasesTab account={a} />}
+      {tab === "cases" && ctl.viewCases && <CasesTab account={a} />}
     </div>
   );
 }
@@ -622,9 +638,11 @@ function TabBtn({
 function AddressBlock({
   value,
   onSave,
+  readOnly = false,
 }: {
   value: Address | null;
   onSave: (next: Address | null) => void;
+  readOnly?: boolean;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<Address>(
@@ -657,12 +675,13 @@ function AddressBlock({
     return (
       <div
         onClick={() => {
+          if (readOnly) return;
           setDraft(
             value ?? { line1: "", line2: "", city: "", state: "", zip: "", country: "US" },
           );
           setEditing(true);
         }}
-        className="group cursor-text -mx-1 px-1 py-1 rounded hover:bg-white/[0.04]"
+        className={cn("group -mx-1 px-1 py-1 rounded", !readOnly && "cursor-text hover:bg-white/[0.04]")}
       >
         {value ? (
           <address className="not-italic text-sm leading-snug">
@@ -843,14 +862,14 @@ function CasesTab({ account }: { account: AccountDetailT }) {
           </tr>
         </thead>
         <tbody>
-          {account.cases.length === 0 ? (
+          {(account.cases ?? []).length === 0 ? (
             <tr>
               <td colSpan={5} className="px-4 py-10 text-center text-white/40">
                 No cases yet.
               </td>
             </tr>
           ) : (
-            account.cases.map((c) => (
+            (account.cases ?? []).map((c) => (
               <tr key={c.id} className="border-b border-white/5 hover:bg-white/[0.025]">
                 <td className="px-4 py-3">
                   <Link href={`/cases/${c.id}`}>
@@ -876,5 +895,20 @@ function CasesTab({ account }: { account: AccountDetailT }) {
         </tbody>
       </table>
     </div>
+  );
+}
+
+/**
+ * A field the API redacted for this employee (R2.2): the masked value if the
+ * API sent one (EIN, FinCEN ID), otherwise nothing — never the original.
+ */
+function Restricted({ value }: { value: string | null }) {
+  return (
+    <span data-testid="restricted-field" className="inline-flex items-center gap-2 text-sm">
+      {value ? <span className="font-mono text-white/70">{value}</span> : null}
+      <span className="text-[10px] uppercase tracking-widest text-amber-300/80 border border-amber-300/30 rounded px-1.5 py-0.5">
+        Restricted
+      </span>
+    </span>
   );
 }

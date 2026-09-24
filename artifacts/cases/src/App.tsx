@@ -1,4 +1,5 @@
-import { Redirect, Route, Switch } from "wouter";
+import { Redirect, Route, Switch, useLocation } from "wouter";
+import { canOpenRoute, visibleNavItems, visibleRecordsTabs } from "@cases/access";
 import { AuthProvider, useAuth } from "./lib/auth";
 import { AppLayout } from "./components/layout/AppLayout";
 import { Dashboard } from "./pages/Dashboard";
@@ -14,6 +15,9 @@ import { Settings } from "./pages/Settings";
 import { Messages } from "./pages/Messages";
 import { NotFound } from "./pages/NotFound";
 import { LoginPage } from "./pages/Login";
+import { NoAccess, NoRoleAccess } from "./pages/NoAccess";
+import { AccountSettings } from "./pages/AccountSettings";
+import { isRecordsTab } from "./lib/records";
 
 export function App() {
   return (
@@ -24,7 +28,7 @@ export function App() {
 }
 
 function Gate() {
-  const { user, loading } = useAuth();
+  const { user, loading, permissions } = useAuth();
   if (loading) {
     return (
       <div className="min-h-screen w-full grid place-items-center text-white/40 text-sm">
@@ -33,14 +37,35 @@ function Gate() {
     );
   }
   if (!user) return <LoginPage />;
+  // Permissions arrive with the user (lib/session.ts sets them first), so
+  // nothing below renders with another employee's navigation.
+  // Roles that grant nothing (Filing, Partner, …) get no application at all.
+  if (visibleNavItems(permissions).length === 0) return <NoRoleAccess />;
   return (
     <AppLayout>
+      <GuardedRoutes />
+    </AppLayout>
+  );
+}
+
+/**
+ * The route guard (RBAC Phase 5): a page the employee may not open is replaced
+ * by the No Access screen BEFORE its component mounts, so it fetches nothing.
+ * Rules: ROUTE_ACCESS in lib/access. The API enforces the same rules.
+ */
+function GuardedRoutes() {
+  const [location] = useLocation();
+  const { permissions } = useAuth();
+  if (!canOpenRoute(permissions, location)) return <NoAccess />;
+  const firstTab = visibleRecordsTabs(permissions).find(isRecordsTab);
+  return (
       <Switch>
         <Route path="/" component={Dashboard} />
         <Route path="/leads" component={Leads} />
         {/* Records: Accounts, Clients and Cases as tabs of one workspace. */}
         <Route path="/records">
-          <Redirect to={recordsPath()} replace />
+          {/* The first Records tab this employee may open. */}
+          {firstTab ? <Redirect to={recordsPath(firstTab)} replace /> : <NoAccess />}
         </Route>
         <Route path="/records/:tab" component={Records} />
         {/* The old list URLs now open the matching Records tab, so bookmarks
@@ -65,8 +90,8 @@ function Gate() {
         <Route path="/insights" component={Insights} />
         <Route path="/settings" component={Settings} />
         <Route path="/messages" component={Messages} />
+        <Route path="/account" component={AccountSettings} />
         <Route component={NotFound} />
       </Switch>
-    </AppLayout>
   );
 }

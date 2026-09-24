@@ -51,6 +51,11 @@ const ACCESS: [string, string, Access][] = [
   ["PATCH", "/leads/:id", ["leads.edit"]],
   ["POST", "/leads/:id/convert", ["leads.convert"]],
   ["DELETE", "/leads/:id", ["leads.delete"]],
+  // Reassign pickers (Phase 5): valid new owners for the caller
+  ["GET", "/owners/cases/candidates", ["cases.assign"]],
+  ["GET", "/owners/leads/candidates", ["leads.assign"]],
+  ["GET", "/owners/accounts/candidates", ["accounts.assign"]],
+  ["GET", "/owners/contacts/candidates", ["contacts.assign"]],
   // Reassignment by employee id (Phase 4)
   ["PUT", "/cases/:id/owner", ["cases.assign"]],
   ["PUT", "/leads/:id/owner", ["leads.assign"]],
@@ -196,6 +201,7 @@ add("POST", "/leads/:id/convert", () => `/leads/${fx.lead}/convert`, () => ({ ac
 add("DELETE", "/leads/:id", () => `/leads/${fx.lead2}`);
 // Reassign to the System Owner (id 1): refused by scope for most roles, but
 // never with the capability error unless the role lacks <type>.assign.
+for (const t of ["cases", "leads", "accounts", "contacts"]) add("GET", `/owners/${t}/candidates`, () => `/owners/${t}/candidates`);
 add("PUT", "/cases/:id/owner", () => "/cases/1/owner", () => ({ ownerUserId: 1 }));
 add("PUT", "/leads/:id/owner", () => `/leads/${fx.lead}/owner`, () => ({ ownerUserId: 1 }));
 add("PUT", "/accounts/:id/owner", () => "/accounts/1/owner", () => ({ ownerUserId: 1 }));

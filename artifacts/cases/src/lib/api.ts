@@ -168,7 +168,8 @@ export interface AccountContactRow extends Contact {
 
 export interface AccountDetail extends AccountWithCounts {
   contacts: AccountContactRow[];
-  cases: Case[];
+  /** Absent for employees without cases.view (RBAC Phase 3). */
+  cases?: Case[];
 }
 
 export interface ContactAccountRow extends Account {
@@ -178,7 +179,8 @@ export interface ContactAccountRow extends Account {
 export interface ContactDetail extends Contact {
   fullName: string;
   accounts: ContactAccountRow[];
-  cases: Case[];
+  /** Absent for employees without cases.view (RBAC Phase 3). */
+  cases?: Case[];
 }
 
 // ── Lead ───────────────────────────────────────────────────────────────────
@@ -321,8 +323,10 @@ export interface User {
 export interface MeResponse {
   user: User;
   teams: { id: number; name: string; departmentKey: string; relation: "member" | "supervisor" }[];
-  /** Effective permissions from the user's roles (lib/access). Not yet used by the UI (Phase 5). */
+  /** Effective permissions from the user's roles (lib/access). */
   permissions: EffectivePermissions;
+  /** Members of the teams this employee supervises ("team" scope). */
+  supervisedUserIds?: number[];
 }
 
 export interface Message {

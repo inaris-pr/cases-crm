@@ -16,6 +16,8 @@ import { Input, Label, Select, Textarea } from "@/components/ui/Input";
 import { Modal } from "@/components/ui/Modal";
 import { formatCurrency, formatDate } from "@/lib/format";
 import { cn } from "@/lib/cn";
+import { ACCOUNTING_SECTIONS, visibleSections } from "@cases/access";
+import { useAuth } from "@/lib/auth";
 
 type Tab = "ledger" | "trial" | "balance" | "pl" | "cashflow" | "payroll";
 
@@ -153,15 +155,34 @@ const SEED_LEDGER: LedgerEntry[] = [
   },
 ];
 
+/**
+ * Accounting — a FRONT-END PROTOTYPE on sample data (no accounting API yet).
+ * Tabs follow ACCOUNTING_SECTIONS in lib/access: the statements need
+ * accounting.view, Payroll needs accounting.payroll.view (HR sees only
+ * Payroll). Because there is no API, this gating is front-end only.
+ */
 export function Accounting() {
-  const [tab, setTab] = useState<Tab>("ledger");
+  const { permissions } = useAuth();
+  const allowed = new Set(visibleSections(ACCOUNTING_SECTIONS, permissions).map((s) => s.id));
+  const [picked, setTab] = useState<Tab | null>(null);
+  const firstAllowed = (["ledger", "trial", "balance", "pl", "cashflow", "payroll"] as Tab[]).find((t) => allowed.has(t)) ?? null;
+  const tab = picked && allowed.has(picked) ? picked : firstAllowed;
+  const statementsOnly = !allowed.has("payroll");
+  const payrollOnly = allowed.size === 1 && allowed.has("payroll");
   return (
     <div className="space-y-4">
       <div>
         <div className="label-eyebrow mb-1">Accounting</div>
-        <h1 className="text-xl font-bold tracking-tight">Books & finance</h1>
+        <h1 className="text-xl font-bold tracking-tight">{payrollOnly ? "Payroll" : "Books & finance"}</h1>
         <p className="text-xs text-white/50 mt-0.5">
-          Double-entry bookkeeping, financials, and payroll for the firm.
+          {payrollOnly
+            ? "Payroll for the firm."
+            : statementsOnly
+              ? "Double-entry bookkeeping and financials for the firm."
+              : "Double-entry bookkeeping, financials, and payroll for the firm."}
+        </p>
+        <p data-testid="accounting-prototype-note" className="text-[10px] uppercase tracking-widest text-amber-300/70 mt-1">
+          Prototype — sample data, not connected to real books
         </p>
       </div>
 
@@ -175,11 +196,12 @@ export function Accounting() {
             { id: "cashflow", label: "Cash flow", icon: Banknote },
             { id: "payroll", label: "Payroll", icon: UsersRound },
           ] as { id: Tab; label: string; icon: any }[]
-        ).map((t) => {
+        ).filter((t) => allowed.has(t.id)).map((t) => {
           const Icon = t.icon;
           return (
             <button
               key={t.id}
+              data-testid={`accounting-tab-${t.id}`}
               onClick={() => setTab(t.id)}
               className={cn(
                 "px-3 py-2.5 text-xs border-b-2 -mb-px flex items-center gap-1.5 whitespace-nowrap",

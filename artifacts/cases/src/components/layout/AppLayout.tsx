@@ -3,9 +3,12 @@ import { motion } from "framer-motion";
 import { useLocation } from "wouter";
 import { Sidebar } from "./Sidebar";
 import { MessagesWidget } from "./MessagesWidget";
+import { can } from "@cases/access";
+import { useAuth } from "@/lib/auth";
 
 export function AppLayout({ children }: { children: ReactNode }) {
   const [location] = useLocation();
+  const { permissions } = useAuth();
   return (
     <div className="min-h-screen w-full relative bg-[var(--color-background)] text-white">
       {/* Background glow */}
@@ -25,7 +28,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
         </motion.div>
       </main>
 
-      <MessagesWidget />
+      {can(permissions, "messages.use") && <MessagesWidget />}
     </div>
   );
 }

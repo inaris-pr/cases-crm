@@ -8,7 +8,8 @@ file in the same change.
 (documentation-only update on top of it), then updated for **RBAC Phase 1 —
 identity foundation** (and its browser-login fix) and **RBAC Phase 2 —
 permission core**, **RBAC Phase 3 — backend enforcement** and **RBAC Phase 4 —
-stable ownership ids and real team scope**. Typecheck clean; **515 tests across 39 files**, all passing. Default branch `main`, pushed to the private
+stable ownership ids and real team scope** and **RBAC Phase 5 — role-aware
+frontend**. Typecheck clean; **536 tests across 40 files**, all passing. Default branch `main`, pushed to the private
 remote `inaris-pr/cases-crm`.
 
 ---
@@ -42,6 +43,7 @@ Since recovery (all 2026-09-22/23, see CHANGELOG.md):
 | Login landing fix | Every sign-in lands on the Dashboard; sign-out leaves the protected URL (`cases/src/lib/session.ts`) |
 | RBAC Phase 3 | Backend enforcement: a guard on every route, record scope, Account redaction and field groups, case/lead response shaping, private messages and mentions (§2 Enforcement) |
 | RBAC Phase 4 | Stable owner/author ids (store v2 migration), real team scope from stored teams, reassignment endpoints (§2 Ownership) |
+| RBAC Phase 5 | Role-aware frontend: sidebar, Records tabs, route guard, section and control gating, reassign UI, interim Dashboard; Playwright RBAC suite in CI (§2 Frontend access) |
 
 ---
 
@@ -233,12 +235,45 @@ In `routes.ts`:
   active employees who may view the case; `/api/team` lists active
   employees; `/stats` and `/cases` accept `assigneeUserId` (a name
   filter is resolved to exactly one employee).
-- **Not yet**: the web app is not role-aware (Phase 5), so a role sees
-  sidebar items and pages whose API calls now fail, and the Account page's
-  owner field (which PATCHes `ownerName`) now shows an error until Phase 5
-  adds a reassign control; `mailingAddress` change auditing waits for an
-  audit log; Account/Automation `createdByName`/`lastModifiedByName` stay
-  name-only audit stamps.
+- **Not yet**: `mailingAddress` change auditing waits for an audit log;
+  Account/Automation `createdByName`/`lastModifiedByName` stay name-only
+  audit stamps.
+
+### Frontend access (RBAC Phase 5)
+
+The web app renders only what the employee's permissions allow, from the
+same lib/access rules the API enforces (`@cases/access`, a Vite alias):
+- **Auth state**: `/auth/me` → `permissions` + `supervisedUserIds`;
+  `useAccess()` gives the `AccessContext`. Permissions are set together
+  with the user on sign-in (lib/session.ts), so nothing renders with a
+  previous employee's navigation.
+- **Gate** (`App.tsx`): roles with no navigation (Filing, Partner) get
+  `NoRoleAccess`; every route is checked with `canOpenRoute` BEFORE its
+  page mounts — refused routes show `NoAccess` and fetch nothing;
+  `/records` opens the first permitted tab.
+- **Sidebar** ← `visibleNavItems` (Messages entry; Knowledge Base only when
+  `VITE_KNOWLEDGE_BASE_URL` is set); the account chip opens `/account`
+  (personal settings; API Keys only with `system.integrations.manage`).
+- **Sections**: Records tabs, Accounting tabs (statements need
+  `accounting.view`, Payroll `accounting.payroll.view`; still prototype
+  data), Settings tabs (Invite users hidden until the People phase; Danger
+  zone with `system.data.manage`; Divisions read-only without
+  `settings.teams.manage`), Insights (only live domains).
+- **Controls**: `caseControls` (edit, work, reassign, automations),
+  `leadControls` (edit/convert/first-Case/reassign/delete), `accountControls`
+  (per-field edit by group, archive, reassign, cases), `clientControls`,
+  `createActions`. Redacted Account fields show "Restricted".
+- **Reassign**: `ReassignControl` lists `GET /api/owners/:type/candidates`
+  (active, can view that record type, inside the caller's assign scope)
+  and sends `{ ownerUserId }`.
+- **Dashboard (interim)**: case metrics with `metrics.cases`, recent cases
+  and tasks with `cases.view`; employees with neither (Business Advisors,
+  HR) see only their real mentions, conversations and — with `leads.view` —
+  recent leads. No placeholder KPIs.
+- **Browser tests**: `e2e/` (Playwright, 24 tests, `pnpm test:e2e`) starts its
+  own API (fresh temp store via `CASES_DATA_DIR`) and Vite on 3101/5174;
+  CI job `e2e`. e2e/ is outside the pnpm workspace; `@playwright/test` is
+  pinned exactly in `e2e/package.json`.
 
 ### Domain model
 
@@ -459,7 +494,7 @@ alias for `accountId`.
 
 ### Test coverage
 
-`pnpm test`: Vitest + Supertest, **39 files / 515 tests** in
+`pnpm test`: Vitest + Supertest, **40 files / 536 tests** in
 `artifacts/api-server/test/`. Covers stable ownership (v2 migration,
 refusal on unmapped/ambiguous names, rename safety, spoofing, history),
 team scope and reassignment, authorization (every route declared,
@@ -567,8 +602,8 @@ Unrouted and imported by nothing: `pages/Customers.tsx` (still links to
 
 - **JSON-file store**: single process, whole-file rewrites, no transactions,
   no concurrent-user safety.
-- **Authorization is enforced by the API** (RBAC Phases 3–4), but the web
-  app is not role-aware yet (Phase 5).
+- **Authorization is enforced by the API** (RBAC Phases 3–4) and reflected
+  by the web app (Phase 5).
 - **Ownership is by stable employee id** (Phase 4); display names are
   labels. There is no rename feature yet — a future one should also refresh
   the denormalized `ownerName` labels (history names stay as written).
@@ -612,10 +647,9 @@ Unrouted and imported by nothing: `pages/Customers.tsx` (still links to
 **In progress: role-based access** — see `role-based-access-plan.md`
 (Revision 1) in the Project. Phase 1 (identity foundation), Phase 2
 (permission core, `lib/access`), Phase 3 (backend enforcement) and Phase 4
-(stable ownership ids, team scope, reassignment) are done; next is
-Phase 5 (frontend navigation and gating — requirements and decisions in
-`phase5-frontend-visibility.md` in the Project, including a Playwright RBAC
-suite in CI). Personalized dashboards follow only after those.
+(stable ownership ids, team scope, reassignment) and Phase 5 (role-aware
+frontend, Playwright RBAC suite) are done. Next per the plan: Phase 6
+dashboards — only after approval. Personalized dashboards follow only after those.
 
 1. **CI** — `pnpm install --frozen-lockfile && pnpm typecheck && pnpm test`
    on push.

@@ -1,8 +1,8 @@
 # Continuous integration for Cases CRM.
 #
-# Runs the same two gates a developer runs before calling work done
-# (see CLAUDE.md): `pnpm typecheck` and `pnpm test`. Either failing fails
-# the run.
+# Runs the same gates a developer runs before calling work done
+# (see CLAUDE.md): `pnpm typecheck` and `pnpm test`, plus the targeted
+# Playwright RBAC browser suite in e2e/. Any failing fails the run.
 #
 # Data safety: the live store (artifacts/api-server/data/store.json) is
 # git-ignored, so it is never in the checkout. The test suite runs every file
@@ -103,3 +103,52 @@ jobs:
             exit 1
           fi
           echo "OK: repository unchanged; no live store written."
+
+  e2e:
+    name: RBAC browser suite (Playwright)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      LIVE_STORE: artifacts/api-server/data/store.json
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: 9.0.0
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install app dependencies (frozen lockfile)
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright (pinned in e2e/package.json)
+        # e2e/ is deliberately outside the pnpm workspace; its only
+        # dependency is @playwright/test at an exact version.
+        run: |
+          npm install --prefix e2e --no-package-lock --no-audit --no-fund
+          npx --prefix e2e playwright install --with-deps chromium
+
+      - name: Run the RBAC browser suite
+        # Starts its own API (fresh temp data dir via CASES_DATA_DIR) and Vite
+        # dev server on ports 3101 / 5174 — see e2e/playwright.config.ts.
+        working-directory: e2e
+        run: npx playwright test
+
+      - name: Confirm no live store was written
+        if: ${{ !cancelled() }}
+        run: |
+          if [ -e "$LIVE_STORE" ]; then
+            echo "::error::$LIVE_STORE was created during the browser suite; isolation is broken."
+            exit 1
+          fi
+          echo "OK: no live store written."

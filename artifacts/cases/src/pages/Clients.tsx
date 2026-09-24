@@ -21,11 +21,16 @@ import { Modal } from "@/components/ui/Modal";
 import { Avatar } from "@/components/ui/Avatar";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { cn } from "@/lib/cn";
+import { can, createActions } from "@cases/access";
+import { useAuth } from "@/lib/auth";
 
 type View = "list" | "cards";
 const VIEW_STORAGE_KEY = "cases.clients.view";
 
 export function Clients() {
+  const { permissions } = useAuth();
+  const showCases = can(permissions, "cases.view");
+  const actions = createActions(permissions);
   const [search, setSearch] = useState("");
   const [ownerFilter, setOwnerFilter] = useState("");
   const [view, setView] = useState<View>(() => {
@@ -67,7 +72,7 @@ export function Clients() {
     () => ({
       total: rows.length,
       withCompanies: rows.filter((r) => r.accountCount > 0).length,
-      openCases: rows.reduce((s, r) => s + r.openCaseCount, 0),
+      openCases: rows.reduce((s, r) => s + (r.openCaseCount ?? 0), 0),
     }),
     [rows],
   );
@@ -85,11 +90,11 @@ export function Clients() {
         <div className="flex items-center gap-2">
           <Stat label="Clients" value={totals.total} />
           <Stat label="With companies" value={totals.withCompanies} />
-          <Stat label="Open cases" value={totals.openCases} />
-          <Button onClick={() => setAddOpen(true)}>
+          {showCases && <Stat label="Open cases" value={totals.openCases} />}
+          {actions.newClient && (<Button onClick={() => setAddOpen(true)}>
             <Plus size={14} />
             Add client
-          </Button>
+          </Button>)}
         </div>
       </div>
 
@@ -134,10 +139,12 @@ export function Clients() {
             title="No clients yet"
             description="Add your first client to start opening cases."
             cta={
-              <Button onClick={() => setAddOpen(true)}>
-                <Plus size={16} />
-                Add client
-              </Button>
+              actions.newClient ? (
+                <Button onClick={() => setAddOpen(true)}>
+                  <Plus size={16} />
+                  Add client
+                </Button>
+              ) : undefined
             }
           />
         </div>
@@ -153,6 +160,7 @@ export function Clients() {
 }
 
 function ListView({ rows }: { rows: ContactWithSummary[] }) {
+  const showCases = can(useAuth().permissions, "cases.view");
   const [, navigate] = useLocation();
   return (
     <div className="glass-panel overflow-hidden">
@@ -164,7 +172,7 @@ function ListView({ rows }: { rows: ContactWithSummary[] }) {
             <th className="px-3 py-2.5">Email</th>
             <th className="px-3 py-2.5">Linked companies</th>
             <th className="px-3 py-2.5">Owner</th>
-            <th className="px-3 py-2.5 text-right">Open cases</th>
+            {showCases && <th className="px-3 py-2.5 text-right">Open cases</th>}
           </tr>
         </thead>
         <tbody>
@@ -208,7 +216,7 @@ function ListView({ rows }: { rows: ContactWithSummary[] }) {
                 )}
               </td>
               <td className="px-3 py-2.5 text-xs text-white/65">{c.ownerName}</td>
-              <td className="px-3 py-2.5 text-right">
+              {showCases && (<td className="px-3 py-2.5 text-right">
                 <span
                   className={cn(
                     "text-xs tabular-nums",
@@ -217,7 +225,7 @@ function ListView({ rows }: { rows: ContactWithSummary[] }) {
                 >
                   {c.openCaseCount}
                 </span>
-              </td>
+              </td>)}
             </tr>
           ))}
         </tbody>
@@ -227,6 +235,7 @@ function ListView({ rows }: { rows: ContactWithSummary[] }) {
 }
 
 function CardsView({ rows }: { rows: ContactWithSummary[] }) {
+  const showCases = can(useAuth().permissions, "cases.view");
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
       {rows.map((c) => (
@@ -238,7 +247,7 @@ function CardsView({ rows }: { rows: ContactWithSummary[] }) {
                 <div className="font-semibold text-white truncate">{c.fullName}</div>
                 <div className="text-xs text-white/45 truncate">{c.title ?? "—"}</div>
               </div>
-              <span
+              {showCases && (<span
                 className={cn(
                   "shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-semibold tabular-nums",
                   c.openCaseCount > 0
@@ -247,7 +256,7 @@ function CardsView({ rows }: { rows: ContactWithSummary[] }) {
                 )}
               >
                 {c.openCaseCount} open
-              </span>
+              </span>)}
             </div>
 
             <div className="mt-3 space-y-1.5 text-xs text-white/55">

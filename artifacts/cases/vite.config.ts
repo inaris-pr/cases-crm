@@ -17,6 +17,9 @@ export default defineConfig({
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "src"),
+      // The shared access rules (lib/access): the sidebar, route guard and
+      // controls use the same code the API enforces with.
+      "@cases/access": path.resolve(__dirname, "../../lib/access/src/index.ts"),
     },
   },
   css: {

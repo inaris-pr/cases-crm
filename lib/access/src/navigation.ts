@@ -48,10 +48,36 @@ export const INSIGHTS_SECTIONS: readonly NavSection[] = [
   { id: "people", label: "People", requires: ["insights.people.view"], status: "planned" },
 ];
 
+/**
+ * Accounting tabs (a front-end prototype with sample data — no API yet).
+ * The statements need accounting.view; Payroll alone needs
+ * accounting.payroll.view (HR).
+ */
 export const ACCOUNTING_SECTIONS: readonly NavSection[] = [
-  { id: "ledger", label: "Ledger & statements", requires: ["accounting.view"], status: "live" },
+  { id: "ledger", label: "Ledger", requires: ["accounting.view"], status: "live" },
+  { id: "trial", label: "Trial balance", requires: ["accounting.view"], status: "live" },
+  { id: "balance", label: "Balance sheet", requires: ["accounting.view"], status: "live" },
+  { id: "pl", label: "P&L", requires: ["accounting.view"], status: "live" },
+  { id: "cashflow", label: "Cash flow", requires: ["accounting.view"], status: "live" },
   { id: "payroll", label: "Payroll", requires: ["accounting.payroll.view"], status: "live" },
 ];
+
+/**
+ * Personal settings, in the account menu (/account), not the sidebar.
+ * Everyone signed in gets the first three (requires: []); API Keys is a
+ * privileged integration setting (System Owner).
+ */
+export const PERSONAL_SECTIONS: readonly NavSection[] = [
+  { id: "profile", label: "Profile", requires: [], status: "live" },
+  { id: "notifications", label: "Notifications", requires: [], status: "live" },
+  { id: "security", label: "Security", requires: [], status: "live" },
+  { id: "api_keys", label: "API Keys", requires: ["system.integrations.manage"], status: "live" },
+];
+
+/** The personal settings cards this employee sees (empty `requires` = everyone). */
+export function visiblePersonalSections(perms: EffectivePermissions): NavSection[] {
+  return PERSONAL_SECTIONS.filter((s) => s.requires.length === 0 || canAny(perms, s.requires));
+}
 
 /**
  * Settings (§R3). Personal settings (own profile, notifications, password)
@@ -63,6 +89,7 @@ export const SETTINGS_SECTIONS: readonly NavSection[] = [
   { id: "pipelines", label: "Pipeline stages", requires: ["settings.pipelines.manage"], status: "live" },
   { id: "case_config", label: "Case configuration", requires: ["settings.case_config.manage"], status: "planned" },
   { id: "company", label: "Company config", requires: ["settings.company.manage"], status: "live" },
+  // Includes the "Invite users" prototype, hidden until the People phase.
   { id: "people", label: "People", requires: ["people.view", "people.manage"], status: "planned" },
   { id: "security", label: "Security", requires: ["system.security.manage"], status: "planned" },
   { id: "integrations", label: "Integrations & API keys", requires: ["system.integrations.manage"], status: "planned" },
@@ -140,6 +167,8 @@ export interface RouteAccess {
   requires: readonly Permission[];
   /** Redirect-only routes are guarded by their destination. */
   redirect?: boolean;
+  /** Open to every signed-in employee (e.g. their own account settings). */
+  signedIn?: boolean;
 }
 
 /** Permissions that unlock at least one live section. */
@@ -169,6 +198,7 @@ export const ROUTE_ACCESS: readonly RouteAccess[] = [
   { path: "/accounting", requires: liveRequirements(ACCOUNTING_SECTIONS) },
   { path: "/settings", requires: liveRequirements(SETTINGS_SECTIONS) },
   { path: "/messages", requires: ["messages.use"] },
+  { path: "/account", requires: [], signedIn: true },
 ];
 
 function matches(pattern: string, path: string): boolean {
@@ -189,6 +219,6 @@ export function routeAccessFor(path: string): RouteAccess | null {
  */
 export function canOpenRoute(perms: EffectivePermissions, path: string): boolean {
   const access = routeAccessFor(path);
-  if (!access || access.redirect) return true;
+  if (!access || access.redirect || access.signedIn) return true;
   return canAny(perms, access.requires);
 }

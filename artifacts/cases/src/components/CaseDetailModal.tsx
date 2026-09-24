@@ -40,6 +40,8 @@ import { Button } from "@/components/ui/Button";
 import { Avatar } from "@/components/ui/Avatar";
 import { PriorityBadge } from "@/components/ui/Badge";
 import { MentionBody, MentionTextarea } from "@/components/MentionInput";
+import { caseControls } from "@cases/access";
+import { useAccess } from "@/lib/useAccess";
 import { cn } from "@/lib/cn";
 import { formatDate, formatRelative, formatBytes } from "@/lib/format";
 import { useMyName } from "@/lib/auth";
@@ -131,7 +133,7 @@ export function CaseDetailModal({
 
 function Inner({ caseId, onClose }: { caseId: number; onClose: () => void }) {
   const qc = useQueryClient();
-  const MY_NAME = useMyName();
+  const access = useAccess();
   const [tab, setTab] = useState<Tab>("overview");
   useEffect(() => setTab("overview"), [caseId]);
 
@@ -170,6 +172,8 @@ function Inner({ caseId, onClose }: { caseId: number; onClose: () => void }) {
     );
   }
   const meta = STATUS_META[c.status];
+  // What this employee may do on this case (RBAC Phase 5; the API decides too).
+  const ctl = caseControls(access, c);
 
   const contactCount = contactsQuery.data?.length ?? 0;
   const documentCount = c.documents?.length ?? 0;
@@ -190,7 +194,7 @@ function Inner({ caseId, onClose }: { caseId: number; onClose: () => void }) {
             )}
           </div>
           <div className="flex items-center gap-1.5 shrink-0">
-            <StatusPill status={c.status} onChange={(s) => patchCase.mutate({ status: s })} />
+            <StatusPill status={c.status} readOnly={!ctl.edit} onChange={(s) => patchCase.mutate({ status: s })} />
             <button
               onClick={onClose}
               className="size-7 grid place-items-center rounded-full text-white/50 hover:text-white hover:bg-white/5 border border-white/5"
@@ -202,7 +206,7 @@ function Inner({ caseId, onClose }: { caseId: number; onClose: () => void }) {
         </div>
         <div className="flex items-center gap-2 text-[11px] text-white/40 mt-2">
           <span>
-            Opened by <span className="text-white/70">{MY_NAME}</span>
+            Owner <span className="text-white/70">{c.ownerName}</span>
           </span>
           <span>·</span>
           <span>{formatDate(c.createdAt, { month: "short", day: "numeric", year: "numeric" })}</span>
@@ -245,16 +249,18 @@ function Inner({ caseId, onClose }: { caseId: number; onClose: () => void }) {
             caseId={caseId}
             contacts={contactsQuery.data ?? []}
             loading={contactsQuery.isLoading}
+            canWork={ctl.work}
           />
         )}
         {tab === "documents" && (
-          <DocumentsTab caseId={caseId} documents={c.documents ?? []} />
+          <DocumentsTab caseId={caseId} documents={c.documents ?? []} canWork={ctl.work} />
         )}
         {tab === "thread" && (
           <ThreadTab
             caseId={caseId}
             entries={threadQuery.data ?? []}
             loading={threadQuery.isLoading}
+            canWork={ctl.work}
           />
         )}
       </div>
@@ -265,9 +271,12 @@ function Inner({ caseId, onClose }: { caseId: number; onClose: () => void }) {
 function StatusPill({
   status,
   onChange,
+  readOnly = false,
 }: {
   status: CaseStatus;
   onChange: (s: CaseStatus) => void;
+  /** Without cases.edit the status is shown, not offered as a menu. */
+  readOnly?: boolean;
 }) {
   const meta = STATUS_META[status];
   const Icon = meta.icon;
@@ -286,7 +295,8 @@ function StatusPill({
   return (
     <div ref={ref} className="relative">
       <button
-        onClick={() => setOpen(!open)}
+        onClick={() => !readOnly && setOpen(!open)}
+        disabled={readOnly}
         className="inline-flex items-center gap-1 h-7 px-2 rounded-md border text-[11px] font-semibold transition"
         style={{
           background: `${meta.color}1a`,
@@ -296,7 +306,7 @@ function StatusPill({
       >
         <Icon size={11} />
         {meta.label}
-        <ChevronDown size={11} className="opacity-70" />
+        {!readOnly && <ChevronDown size={11} className="opacity-70" />}
       </button>
       {open && (
         <div className="absolute right-0 top-full mt-1 w-48 glass-panel border border-white/10 rounded-md p-1 z-10 shadow-xl">
@@ -448,10 +458,12 @@ function ContactsTab({
   caseId,
   contacts,
   loading,
+  canWork,
 }: {
   caseId: number;
   contacts: CaseContact[];
   loading: boolean;
+  canWork: boolean;
 }) {
   const qc = useQueryClient();
   const MY_NAME = useMyName();
@@ -481,7 +493,7 @@ function ContactsTab({
 
   return (
     <div className="space-y-3">
-      <form
+      {canWork && (<form
         onSubmit={(e) => {
           e.preventDefault();
           if (contact.trim() && summary.trim()) log.mutate();
@@ -525,7 +537,7 @@ function ContactsTab({
             {log.isPending ? "Saving…" : "Log contact"}
           </Button>
         </div>
-      </form>
+      </form>)}
 
       {loading ? (
         <div className="text-[11px] text-white/40 text-center py-4">Loading…</div>
@@ -587,9 +599,11 @@ function ContactsTab({
 function DocumentsTab({
   caseId,
   documents,
+  canWork,
 }: {
   caseId: number;
   documents: Doc[];
+  canWork: boolean;
 }) {
   const qc = useQueryClient();
   const [filename, setFilename] = useState("");
@@ -616,7 +630,7 @@ function DocumentsTab({
   });
   return (
     <div className="space-y-3">
-      <form
+      {canWork && (<form
         onSubmit={(e) => {
           e.preventDefault();
           if (filename.trim() && url.trim()) upload.mutate();
@@ -648,7 +662,7 @@ function DocumentsTab({
             {upload.isPending ? "Uploading…" : "Add"}
           </Button>
         </div>
-      </form>
+      </form>)}
       {documents.length === 0 ? (
         <div className="rounded-lg border border-white/8 bg-white/[0.025] p-5 text-center">
           <FileText size={16} className="mx-auto text-white/30 mb-1.5" />
@@ -697,10 +711,12 @@ function ThreadTab({
   caseId,
   entries,
   loading,
+  canWork,
 }: {
   caseId: number;
   entries: CaseThreadEntry[];
   loading: boolean;
+  canWork: boolean;
 }) {
   const qc = useQueryClient();
   const MY_NAME = useMyName();
@@ -721,7 +737,7 @@ function ThreadTab({
 
   return (
     <div className="space-y-3">
-      <form
+      {canWork && (<form
         onSubmit={(e) => {
           e.preventDefault();
           if (body.trim()) post.mutate();
@@ -743,7 +759,7 @@ function ThreadTab({
             {post.isPending ? "Posting…" : "Post"}
           </Button>
         </div>
-      </form>
+      </form>)}
 
       {loading ? (
         <div className="text-[11px] text-white/40 text-center py-4">Loading…</div>

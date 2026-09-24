@@ -23,6 +23,7 @@ import { Avatar } from "@/components/ui/Avatar";
 import { cn } from "@/lib/cn";
 import { formatRelative } from "@/lib/format";
 import { useAuth } from "@/lib/auth";
+import { can } from "@cases/access";
 
 /** @deprecated — use `useAuth().user.name` instead. Kept as a fallback when
  *  no user is signed in (e.g. on the login page) so older code paths don't
@@ -71,6 +72,7 @@ export function MessagesWidget() {
   const [composerSelected, setComposerSelected] = useState<string[]>([]);
 
   const qc = useQueryClient();
+  const canTagCases = can(useAuth().permissions, "cases.view");
 
   const convosQuery = useQuery({
     queryKey: ["conversations"],
@@ -118,7 +120,7 @@ export function MessagesWidget() {
   const casesQuery = useQuery({
     queryKey: ["cases", "for-tagging"],
     queryFn: () => fetchJson<Case[]>(API("/api/cases")),
-    enabled: showCasePicker,
+    enabled: showCasePicker && canTagCases,
   });
 
   const sendMessage = useMutation({
@@ -522,6 +524,7 @@ export function MessagesWidget() {
                       setShowCasePicker={setShowCasePicker}
                       cases={casesQuery.data ?? []}
                       sending={sendMessage.isPending}
+                      canTagCases={canTagCases}
                     />
                   </>
                 )}
@@ -895,6 +898,7 @@ function Composer({
   setShowCasePicker,
   cases,
   sending,
+  canTagCases,
 }: {
   input: string;
   setInput: (v: string) => void;
@@ -905,6 +909,8 @@ function Composer({
   setShowCasePicker: (v: boolean) => void;
   cases: Case[];
   sending: boolean;
+  /** Only employees who can view cases can tag them (RBAC Phase 5). */
+  canTagCases: boolean;
 }) {
   return (
     <div className="border-t border-white/5 p-3 space-y-2">
@@ -930,7 +936,7 @@ function Composer({
         </div>
       )}
       <div className="flex items-end gap-2">
-        <div className="relative">
+        {canTagCases && (<div className="relative">
           <button
             type="button"
             onClick={() => setShowCasePicker(!showCasePicker)}
@@ -970,7 +976,7 @@ function Composer({
               )}
             </div>
           )}
-        </div>
+        </div>)}
         <textarea
           value={input}
           onChange={(e) => setInput(e.target.value)}

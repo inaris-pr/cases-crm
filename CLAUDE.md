@@ -37,7 +37,8 @@ Run from `cases-app/`. Requires Node ≥20 and pnpm 9.0.0 (`corepack prepare pnp
 | `pnpm dev:api` | API only |
 | `pnpm dev:web` | Frontend only (proxies /api to :3001) |
 | `pnpm typecheck` | tsc --noEmit across the workspace (API src + tests, web, lib/db, lib/access) — **must stay clean** |
-| `pnpm test` | Vitest + Supertest suite (39 files, 515 tests) — **must stay green** |
+| `pnpm test` | Vitest + Supertest suite (40 files, 536 tests) — **must stay green** |
+| `pnpm test:e2e` | Playwright RBAC browser suite (e2e/, 24 tests; own API + Vite on 3101/5174, temp data) |
 | `pnpm build` | esbuild bundle for the API, `tsc -b && vite build` for the web |
 | `pnpm api:generate` | Orval regen from the OpenAPI spec — **do not run**; the spec is stale |
 
@@ -125,8 +126,17 @@ it, debounced, after every successful non-GET request.
 - **Response shaping**: Accounts go out through `shapeAccount` (R2.2
   redaction + `redactedFields`) wherever they appear; without `cases.view` no
   case data at all (no `cases`, `caseCount`, `openCaseCount`, case tags);
-  messages are membership-scoped; mentions are your own only. The web app is
-  not role-aware yet (Phase 5) — pages a role may not use show errors.
+  messages are membership-scoped; mentions are your own only.
+- **The web app is role-aware (Phase 5)** and renders only from lib/access:
+  Sidebar ← `visibleNavItems`, Records tabs ← `visibleRecordsTabs`, every
+  route ← `canOpenRoute` in `App.tsx` (No Access screen before the page
+  mounts, so it fetches nothing), Accounting/Settings/personal settings ←
+  their `*_SECTIONS`, per-record controls ← `caseControls` /
+  `leadControls` / `accountControls` / `clientControls` with `useAccess()`.
+  Unauthorized things are ABSENT, not disabled. Owners change only through
+  `ReassignControl` (candidates from `GET /api/owners/:type/candidates`).
+  A new page or control needs its permission check here too — the API
+  stays authoritative.
 - **`lib/access` is the single source of access rules** (Phase 2): role keys,
   the permission catalog, own/team/all scopes, role bundles, Account field
   groups with sensitive-read rules, Settings/Insights permissions, the
@@ -177,7 +187,7 @@ it, debounced, after every successful non-GET request.
 ## Tests
 
 `pnpm test` from the root, or `pnpm --filter @cases/api-server test`.
-Vitest + Supertest, in `artifacts/api-server/test/` — 39 files, 515 tests.
+Vitest + Supertest, in `artifacts/api-server/test/` — 40 files, 536 tests.
 
 - **Every request needs a session.** `test/helpers/app.ts` logs in through the
   real endpoint: `asMe` is Iris's session cookie, `loginAs(email)` returns

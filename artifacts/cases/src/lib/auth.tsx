@@ -3,16 +3,18 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { API, UNAUTHENTICATED_EVENT, fetchJson } from "./api";
 import type { EffectivePermissions, MeResponse, User } from "./api";
+import type { AccessContext } from "@cases/access";
 import { beginSession, endSession, resumeSession, type SessionEffects } from "./session";
 
 interface AuthState {
   user: User | null;
   /**
-   * Effective permissions from GET /api/auth/me. Held here for Phase 5
-   * (navigation and gating); nothing reads them yet, and the API does not
-   * enforce them until Phase 3.
+   * Effective permissions from GET /api/auth/me — what the sidebar, route
+   * guard and controls are built from (the API enforces the same rules).
    */
   permissions: EffectivePermissions;
+  /** The employee's access context for record-level controls (null when signed out). */
+  access: AccessContext | null;
   loading: boolean;
   /**
    * Called by the login page after POST /api/auth/login succeeded. Loads the
@@ -24,6 +26,18 @@ interface AuthState {
 }
 
 const AuthContext = createContext<AuthState | null>(null);
+
+/** What a session is allowed to do, as reported by GET /api/auth/me. */
+interface AccessGrant {
+  permissions: EffectivePermissions;
+  supervisedUserIds: number[];
+}
+/** Signed out, or /auth/me unavailable: nothing is shown. */
+const NO_ACCESS: AccessGrant = { permissions: {}, supervisedUserIds: [] };
+
+function grantFrom(me: MeResponse): AccessGrant {
+  return { permissions: me.permissions ?? {}, supervisedUserIds: me.supervisedUserIds ?? [] };
+}
 
 /** Where the pre-Phase-1 client kept the signed-in user. No longer used. */
 const LEGACY_STORAGE_KEY = "cases.auth.user";
@@ -42,21 +56,21 @@ const LEGACY_STORAGE_KEY = "cases.auth.user";
 export function AuthProvider({ children }: { children: ReactNode }) {
   const qc = useQueryClient();
   const [user, setUser] = useState<User | null>(null);
-  const [permissions, setPermissions] = useState<EffectivePermissions>({});
+  const [grant, setGrant] = useState<AccessGrant>(NO_ACCESS);
   const [loading, setLoading] = useState(true);
   const [, navigate] = useLocation();
 
-  const effects = useMemo<SessionEffects<User, EffectivePermissions>>(
+  const effects = useMemo<SessionEffects<User, AccessGrant>>(
     () => ({
       clearCache: () => qc.clear(), // never show one employee's cached data to the next
       setUser,
-      setPermissions,
+      setPermissions: setGrant,
       replaceLocation: (path) => navigate(path, { replace: true }),
     }),
     [qc, navigate],
   );
 
-  const signedOut = useCallback(() => endSession(effects, {}), [effects]);
+  const signedOut = useCallback(() => endSession(effects, NO_ACCESS), [effects]);
 
   useEffect(() => {
     try {
@@ -69,7 +83,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       .then((me) => {
         if (cancelled) return;
         // A reload with a live session: stay on the current page.
-        resumeSession(effects, me.user, me.permissions ?? {});
+        resumeSession(effects, me.user, grantFrom(me));
       })
       .catch(() => !cancelled && setUser(null))
       .finally(() => !cancelled && setLoading(false));
@@ -89,17 +103,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     async (fromLogin: User) => {
       // The new session's employee and permissions, as the server sees them.
       let user = fromLogin;
-      let permissions: EffectivePermissions = {};
+      let permissions: AccessGrant = NO_ACCESS;
       try {
         const me = await fetchJson<MeResponse>(API("/api/auth/me"));
         user = me.user;
-        permissions = me.permissions ?? {};
+        permissions = grantFrom(me);
       } catch {
         // Keep the employee from the login response; permissions stay empty.
       }
       beginSession(effects, user, permissions);
     },
     [effects],
+  );
+
+  const access = useMemo<AccessContext | null>(
+    () => (user ? { userId: user.id, permissions: grant.permissions, supervisedUserIds: grant.supervisedUserIds } : null),
+    [user, grant],
   );
 
   const logout = useCallback(async () => {
@@ -112,7 +131,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [signedOut]);
 
   return (
-    <AuthContext.Provider value={{ user, permissions, loading, login, logout }}>
+    <AuthContext.Provider value={{ user, permissions: grant.permissions, access, loading, login, logout }}>
       {children}
     </AuthContext.Provider>
   );

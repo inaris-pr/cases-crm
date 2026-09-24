@@ -67,7 +67,14 @@ describe("GET /api/auth/me permissions", () => {
     const body = await me("devon@example.com");
     const text = JSON.stringify(body);
     expect(text).not.toMatch(/passwordHash|scrypt\$/);
-    expect(Object.keys(body).sort()).toEqual(["permissions", "teams", "user"]);
+    expect(Object.keys(body).sort()).toEqual(["permissions", "supervisedUserIds", "teams", "user"]);
+  });
+
+  it("reports the members of the teams the employee supervises (Phase 5 controls)", async () => {
+    const nadia = await me("nadia@example.com");
+    expect(nadia.supervisedUserIds).toEqual([2, 3]); // Devon, Sara (Customer Service)
+    expect((await me("devon@example.com")).supervisedUserIds).toEqual([]);
+    expect((await me("rachel@example.com")).supervisedUserIds).toEqual([7]); // Omar (Operations)
   });
 
   it("still requires a session", async () => {

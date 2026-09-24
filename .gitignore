@@ -34,3 +34,7 @@ _tmp_3_*
 # ─────────────────────────────────────────────────────────────────────────────
 artifacts/api-server/data/*
 !artifacts/api-server/data/store.snapshot.json
+
+# Playwright (e2e/) outputs
+e2e/test-results
+e2e/playwright-report

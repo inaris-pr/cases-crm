@@ -10,7 +10,37 @@ recovered working tree — the project had no repository, so there is no history
 ## [Unreleased]
 
 Everything since the recovery release, 2026-09-22 → 2026-09-24.
-State at the end of this section: typecheck clean, **515 tests in 39 files**.
+State at the end of this section: typecheck clean, **536 tests in 40 files**.
+
+### Added — RBAC Phase 5: role-aware frontend (2026-09-24)
+- **The web app shows each employee only what their role permits**, from
+  the same lib/access rules the API enforces: the sidebar, Records tabs,
+  Accounting tabs (HR: Payroll only), Settings sections (no system
+  settings below System Owner; Invite users hidden until the People phase),
+  and personal settings in the account menu (`/account`; API Keys for the
+  System Owner only). Roles with no access get a "No access has been set up
+  for your role yet" screen.
+- **Route guard**: a URL the employee may not open shows "You don't have
+  access to this page" before the page mounts, so it fetches nothing; the
+  API still refuses too.
+- **Controls follow record-level permissions**: case edit/work/automation
+  controls, lead convert (first Case only with `cases.create`), New
+  Lead/Case/Client, Account field editing by field group with redacted
+  fields shown as "Restricted", and no case lists, counts or New Case for
+  employees without case access.
+- **Reassign** replaces owner-name editing: shown only with the assign
+  permission, listing only valid targets from the new
+  `GET /api/owners/:type/candidates`, sending `{ ownerUserId }`.
+- **Interim Dashboard**: case metrics and lists only for roles with them;
+  Business Advisors and HR see their real mentions, conversations and (with
+  leads) recent leads — no placeholder numbers.
+- API: `/auth/me` adds `supervisedUserIds`; `CASES_DATA_DIR` relocates the
+  store (used by the browser suite); the scope evaluator moved into
+  lib/access (`canOnOwner`), shared by API and web.
+- **Playwright RBAC suite** (`e2e/`, 24 tests) runs in CI as its own job,
+  against its own API and Vite with a throwaway store.
+- Unit tests: `access-controls.test.ts` (controls, sections, guard wiring,
+  no owner-by-name writes).
 
 ### Security — RBAC Phase 4: stable ownership ids and real team scope (2026-09-24)
 - **Ownership and authorship are stable employee ids.** New fields:

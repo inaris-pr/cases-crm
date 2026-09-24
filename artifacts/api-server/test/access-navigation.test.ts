@@ -98,7 +98,7 @@ describe("sections per role", () => {
     expect(ins("csr")).toEqual([]);
     const acc = (role: RoleKey) => visibleSections(ACCOUNTING_SECTIONS, as(role)).map((s) => s.id);
     expect(acc("hr")).toEqual(["payroll"]);
-    expect(acc("system_owner")).toEqual(["ledger", "payroll"]);
+    expect(acc("system_owner")).toEqual(["ledger", "trial", "balance", "pl", "cashflow", "payroll"]);
     expect(acc("operations_admin_supervisor")).toEqual([]);
   });
 

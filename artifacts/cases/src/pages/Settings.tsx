@@ -1,9 +1,5 @@
 import { Fragment, useRef, useState } from "react";
 import {
-  User,
-  Bell,
-  Shield,
-  Key,
   ShieldCheck,
   Mail,
   X,
@@ -22,13 +18,37 @@ import { Input, Label, Select, Textarea } from "@/components/ui/Input";
 import { Avatar } from "@/components/ui/Avatar";
 import { cn } from "@/lib/cn";
 import { formatDate } from "@/lib/format";
+import { can, SETTINGS_SECTIONS, visibleSections } from "@cases/access";
+import { useAuth } from "@/lib/auth";
 
 type AdminTab = "invite" | "divisions" | "pipelines" | "company";
 
+/**
+ * Admin tabs and the lib/access Settings section each one belongs to.
+ * "Invite users" is part of the People section, which is planned: it stays
+ * hidden from everyone until the People phase makes it real.
+ */
+const ADMIN_TABS: { id: AdminTab; label: string; section: string }[] = [
+  { id: "invite", label: "Invite users", section: "people" },
+  { id: "divisions", label: "Divisions & teams", section: "teams" },
+  { id: "pipelines", label: "Pipeline stages", section: "pipelines" },
+  { id: "company", label: "Company config", section: "company" },
+];
+
 const SWATCHES = ["#29F312", "#3b82f6", "#a855f7", "#f59e0b", "#10b981", "#ef4444", "#ec4899", "#06b6d4"];
 
+/**
+ * Operational and system settings (front-end prototypes, local state only).
+ * Only the sections this employee's permissions allow are rendered (RBAC
+ * Phase 5); personal settings are in the account menu (/account).
+ */
 export function Settings() {
-  const [adminTab, setAdminTab] = useState<AdminTab>("invite");
+  const { permissions } = useAuth();
+  const allowed = new Set(visibleSections(SETTINGS_SECTIONS, permissions).map((s) => s.id));
+  const tabs = ADMIN_TABS.filter((t) => allowed.has(t.section));
+  const [picked, setAdminTab] = useState<AdminTab | null>(null);
+  const adminTab = picked && tabs.some((t) => t.id === picked) ? picked : tabs[0]?.id ?? null;
+  const canManageTeams = can(permissions, "settings.teams.manage");
   return (
     <div className="space-y-6">
       <div>
@@ -36,18 +56,8 @@ export function Settings() {
         <h1 className="text-xl font-bold tracking-tight">Settings</h1>
       </div>
 
-      {/* Personal */}
-      <section>
-        <div className="label-eyebrow mb-3">Personal</div>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-          <PersonalCard icon={User} title="Profile" description="Manage your personal information and avatar." />
-          <PersonalCard icon={Bell} title="Notifications" description="Configure email, push, and in-app alerts." />
-          <PersonalCard icon={Shield} title="Security" description="Update your password and enable 2FA." />
-          <PersonalCard icon={Key} title="API Keys" description="Manage developer access tokens." />
-        </div>
-      </section>
-
       {/* Admin */}
+      {tabs.length > 0 && (
       <section>
         <div className="flex items-center gap-3 mb-3">
           <div className="label-eyebrow flex items-center gap-2">
@@ -60,16 +70,10 @@ export function Settings() {
         </div>
 
         <div className="flex items-center gap-1 border-b border-white/5 mb-4">
-          {(
-            [
-              { id: "invite", label: "Invite users" },
-              { id: "divisions", label: "Divisions & teams" },
-              { id: "pipelines", label: "Pipeline stages" },
-              { id: "company", label: "Company config" },
-            ] as { id: AdminTab; label: string }[]
-          ).map((t) => (
+          {tabs.map((t) => (
             <button
               key={t.id}
+              data-testid={`settings-tab-${t.id}`}
               onClick={() => setAdminTab(t.id)}
               className={cn(
                 "px-3 py-2.5 text-xs border-b-2 -mb-px",
@@ -84,13 +88,15 @@ export function Settings() {
         </div>
 
         {adminTab === "invite" && <InviteUsers />}
-        {adminTab === "divisions" && <Divisions />}
+        {adminTab === "divisions" && <Divisions readOnly={!canManageTeams} />}
         {adminTab === "pipelines" && <Pipelines />}
         {adminTab === "company" && <CompanyConfig />}
       </section>
+      )}
 
       {/* Danger zone */}
-      <section className="rounded-2xl border border-rose-500/30 bg-rose-500/5 p-5">
+      {allowed.has("data") && (
+      <section data-testid="settings-danger-zone" className="rounded-2xl border border-rose-500/30 bg-rose-500/5 p-5">
         <div className="label-eyebrow mb-1 text-rose-300">Danger zone</div>
         <div className="flex items-center justify-between gap-4 flex-wrap">
           <div>
@@ -104,27 +110,8 @@ export function Settings() {
           </button>
         </div>
       </section>
+      )}
     </div>
-  );
-}
-
-function PersonalCard({
-  icon: Icon,
-  title,
-  description,
-}: {
-  icon: any;
-  title: string;
-  description: string;
-}) {
-  return (
-    <button className="glass-panel p-4 text-left group hover:border-[var(--color-primary)]/30 transition-all hover:-translate-y-0.5">
-      <div className="size-10 rounded-lg grid place-items-center bg-[var(--color-primary)]/10 text-[var(--color-primary)] mb-3">
-        <Icon size={18} />
-      </div>
-      <div className="font-semibold">{title}</div>
-      <div className="text-xs text-white/50 mt-1">{description}</div>
-    </button>
   );
 }
 
@@ -274,7 +261,8 @@ interface Division {
   members: Member[];
 }
 
-function Divisions() {
+/** Divisions & teams (prototype). Read-only without settings.teams.manage. */
+function Divisions({ readOnly = false }: { readOnly?: boolean }) {
   const [divisions, setDivisions] = useState<Division[]>([
     {
       id: 1,
@@ -340,13 +328,15 @@ function Divisions() {
 
   return (
     <div className="space-y-4">
+      {!readOnly && (
       <div className="flex justify-end">
         <Button onClick={() => setShowForm(!showForm)}>
           <Plus size={14} />
           New division
         </Button>
       </div>
-      {showForm && (
+      )}
+      {!readOnly && showForm && (
         <form onSubmit={createDivision} className="glass-panel p-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div>
             <Label>Division name</Label>
@@ -410,6 +400,7 @@ function Divisions() {
                 <span className="text-xs bg-white/5 px-2 py-1 rounded-full text-white/60">
                   {d.members.length} member{d.members.length === 1 ? "" : "s"}
                 </span>
+                {!readOnly && (
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
@@ -419,6 +410,7 @@ function Divisions() {
                 >
                   <Trash2 size={14} />
                 </button>
+                )}
               </button>
               {isOpen && (
                 <div className="border-t border-white/5 p-4 space-y-2">
@@ -432,7 +424,7 @@ function Divisions() {
                         <div className="text-sm">{m.name}</div>
                         <div className="text-xs text-white/40 truncate">{m.email}</div>
                       </div>
-                      <button
+                      {!readOnly && <button
                         onClick={() =>
                           setDivisions(
                             divisions.map((x) =>
@@ -445,10 +437,10 @@ function Divisions() {
                         className="text-white/40 hover:text-rose-400 p-1"
                       >
                         <X size={14} />
-                      </button>
+                      </button>}
                     </div>
                   ))}
-                  <div className="flex flex-wrap items-end gap-2 pt-2 border-t border-white/5">
+                  {!readOnly && <div className="flex flex-wrap items-end gap-2 pt-2 border-t border-white/5">
                     <div className="flex-1 min-w-[160px]">
                       <Label>Name</Label>
                       <Input
@@ -471,7 +463,7 @@ function Divisions() {
                       <Plus size={14} />
                       Add member
                     </Button>
-                  </div>
+                  </div>}
                 </div>
               )}
             </div>
