@@ -131,12 +131,16 @@ jobs:
       - name: Install app dependencies (frozen lockfile)
         run: pnpm install --frozen-lockfile
 
-      - name: Install Playwright (pinned in e2e/package.json)
-        # e2e/ is deliberately outside the pnpm workspace; its only
-        # dependency is @playwright/test at an exact version.
+      - name: Install Playwright (locked by e2e/package-lock.json)
+        # e2e/ is deliberately outside the pnpm workspace. npm ci installs
+        # exactly what e2e/package-lock.json records (@playwright/test pinned
+        # to 1.56.1) and fails if package.json and the lockfile disagree.
+        # Not cached: four small packages; the pnpm cache above stays keyed
+        # on pnpm-lock.yaml only.
+        working-directory: e2e
         run: |
-          npm install --prefix e2e --no-package-lock --no-audit --no-fund
-          npx --prefix e2e playwright install --with-deps chromium
+          npm ci --no-audit --no-fund
+          npx playwright install --with-deps chromium
 
       - name: Run the RBAC browser suite
         # Starts its own API (fresh temp data dir via CASES_DATA_DIR) and Vite

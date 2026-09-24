@@ -273,7 +273,8 @@ same lib/access rules the API enforces (`@cases/access`, a Vite alias):
 - **Browser tests**: `e2e/` (Playwright, 24 tests, `pnpm test:e2e`) starts its
   own API (fresh temp store via `CASES_DATA_DIR`) and Vite on 3101/5174;
   CI job `e2e`. e2e/ is outside the pnpm workspace; `@playwright/test` is
-  pinned exactly in `e2e/package.json`.
+  pinned exactly in `e2e/package.json` and locked by `e2e/package-lock.json`
+  (installed with `npm ci`).
 
 ### Domain model
 

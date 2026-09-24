@@ -12,6 +12,10 @@ recovered working tree — the project had no repository, so there is no history
 Everything since the recovery release, 2026-09-22 → 2026-09-24.
 State at the end of this section: typecheck clean, **536 tests in 40 files**.
 
+### Changed — reproducible browser-suite install (2026-09-24)
+- `e2e/package-lock.json` locks `@playwright/test` 1.56.1 and its
+  dependencies; CI and `pnpm test:e2e` install it with `npm ci`.
+
 ### Added — RBAC Phase 5: role-aware frontend (2026-09-24)
 - **The web app shows each employee only what their role permits**, from
   the same lib/access rules the API enforces: the sidebar, Records tabs,
