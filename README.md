@@ -35,6 +35,14 @@ practice — leads, companies, the people behind them, and the matters in flight
   revert. *Management only — automations are not executed yet.*
 - **Messages** — team DMs and groups with case tagging and `@mention` alerts.
 - **Insights** — charts over cases and assignees.
+- **Knowledge Base (foundation, API only)** — internal state reference
+  articles, one per jurisdiction per entity type, copied verbatim from the
+  company's LLC state-by-state reference PDF. Five LLC pilot articles today
+  (Arizona, California, Delaware, Florida, Wyoming), readable through
+  `GET /api/knowledge/articles` by employees with Knowledge Base access.
+  Internal-only, not counsel-reviewed; open research items stay marked as
+  unresolved. No Knowledge Base page, Case recommendations or AI assistant
+  yet.
 - **Roles and permissions** — every employee sees and can do only what their
   role allows (own / team / company scope), enforced by the API and mirrored
   in the UI.
@@ -116,7 +124,7 @@ Partner roles are reserved and have no access yet.
 | `pnpm dev:api` | API only |
 | `pnpm dev:web` | Frontend only |
 | `pnpm typecheck` | TypeScript across the workspace — currently clean |
-| `pnpm test` | Test suite (Vitest + Supertest) — 644 tests in 48 files |
+| `pnpm test` | Test suite (Vitest + Supertest) — 730 tests in 52 files |
 | `pnpm test:e2e` | Playwright RBAC, dashboard and case-lifecycle browser suite (e2e/) — 54 tests |
 | `pnpm build` | Production builds for everything |
 | `pnpm api:generate` | Orval regen — **don't**, the spec it reads is stale |

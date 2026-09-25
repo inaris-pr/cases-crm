@@ -31,7 +31,8 @@ Navigation (each employee sees only what their permissions allow):
 Dashboard, Leads, **Records** (Accounts | Clients | Cases), Insights,
 Messages, Accounting (prototype data), Settings. Automations live **inside
 each case** (Case Detail → Automations); they are configured, **never
-executed**.
+executed**. The **Knowledge Base** (Phase 8) exists as a backend/API only —
+five internal LLC pilot articles; there is no Knowledge Base page yet.
 
 ## Core rules (read before changing anything)
 
@@ -64,7 +65,15 @@ executed**.
    first, ordered by the server.
 8. **Automations do not execute.** Never produce an "Automation ran" entry
    or UI copy implying execution until a real engine exists.
-9. **Every change ends green**: `pnpm typecheck`, `pnpm test`,
+9. **The Knowledge Base preserves its source.** One article per
+   jurisdiction per entity type; sections, not separate articles. Article
+   text is verbatim from the named source document (the LLC PDF for LLC
+   articles) — never corrected, completed, reconciled with the web or merged
+   with Corporation rules. An **Open Research Item stays unverified** and is
+   never presented as a requirement; "published" means internal only, never
+   customer-facing or counsel-reviewed. One repository serves every future
+   consumer (UI, Case recommendations, Knowledge Assistant).
+10. **Every change ends green**: `pnpm typecheck`, `pnpm test`,
    `pnpm test:e2e`, and CI (Node 20, Node 22, Playwright). Commit each phase
    separately; never push without the owner's approval.
 
@@ -78,7 +87,7 @@ Run from `cases-app/`. Requires Node ≥20 and pnpm 9.0.0 (`corepack prepare pnp
 | `pnpm dev:api` | API only |
 | `pnpm dev:web` | Frontend only (proxies /api to :3001) |
 | `pnpm typecheck` | tsc --noEmit across the workspace (API src + tests, web, lib/db, lib/access) — **must stay clean** |
-| `pnpm test` | Vitest + Supertest suite (48 files, 644 tests) — **must stay green** |
+| `pnpm test` | Vitest + Supertest suite (52 files, 730 tests) — **must stay green** |
 | `pnpm test:e2e` | Playwright RBAC, dashboard and case-lifecycle browser suite (e2e/, 54 tests; own API + Vite on 3101/5174, temp data) |
 | `pnpm build` | esbuild bundle for the API, `tsc -b && vite build` for the web |
 | `pnpm api:generate` | Orval regen from the OpenAPI spec — **do not run**; the spec is stale |
@@ -211,6 +220,22 @@ it, debounced, after every successful non-GET request.
   `automation_execution` until
   a real engine runs automations. Phone calls stay aggregated (one card per
   direction). Details: CLAUDE_HANDOFF.md §2 "Case Thread".
+- **Knowledge Base (Phase 8)** lives in `artifacts/api-server/src/knowledge/`:
+  `model.ts` (types, 51 jurisdictions, LLC section template, flags, topic
+  and service vocabularies with evidence patterns), `validate.ts` (runs at
+  startup; invalid content refuses to load), `content/` (source-controlled
+  articles — `llcPilot.ts` and `llcSource.ts` are GENERATED from
+  `LLC-Formation-Services-by-State.pdf` by
+  `scripts/knowledge/generate_llc_pilot.py`; never hand-edit their prose),
+  `repository.ts` (the one frozen repository + filtering) and `routes.ts`
+  (read-only `GET /knowledge/articles[/:idOrSlug]`, `knowledge.view`). It is
+  **not** in `store.json` — no collection, no migration. Every topic,
+  service key and service-profile value must be supported by its own
+  section's text (validation enforces it); ids are
+  `<entityType>-<code>-state-services`, section ids `<articleId>:<key>`.
+  `test/knowledge-pilot.test.ts` re-reads a raw PDF extract
+  (`test/fixtures/llcPilotSourceExtract.ts`) and fails on any changed,
+  dropped or reordered word. Details: CLAUDE_HANDOFF.md §2 "Knowledge Base".
 - **`lib/access` is the single source of access rules** (Phase 2): role keys,
   the permission catalog, own/team/all scopes, role bundles, Account field
   groups with sensitive-read rules, Settings/Insights permissions, the
@@ -264,7 +289,7 @@ it, debounced, after every successful non-GET request.
 ## Tests
 
 `pnpm test` from the root, or `pnpm --filter @cases/api-server test`.
-Vitest + Supertest, in `artifacts/api-server/test/` — 48 files, 644 tests.
+Vitest + Supertest, in `artifacts/api-server/test/` — 52 files, 730 tests.
 
 - **Every request needs a session.** `test/helpers/app.ts` logs in through the
   real endpoint: `asMe` is Iris's session cookie, `loginAs(email)` returns
@@ -334,8 +359,11 @@ Do not, without being asked:
   `MessagesWidget.tsx` with `pages/Messages.tsx`, or the Board's
   `NewCaseModalForClient` with `NewCaseDrawer`.
 - Wire up `lib/db`, run migrations, or introduce Postgres.
-- Add AI/LLM functionality, an Accounting backend, an **automation execution
-  engine**, or a Settings backend.
+- Add AI/LLM functionality, embeddings or a vector store, an Accounting
+  backend, an **automation execution engine**, or a Settings backend.
+- Add Knowledge Base articles, Corporation content, a Knowledge Base UI or
+  Case recommendations outside an approved phase, or edit article text
+  away from its source.
 - Upgrade dependencies. Tailwind is on a v4 **beta** and esbuild is pinned to
   0.21.5 by a root override for a reason.
 

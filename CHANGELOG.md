@@ -10,10 +10,50 @@ recovered working tree — the project had no repository, so there is no history
 ## [Unreleased]
 
 Everything since the recovery release, 2026-09-22 → 2026-09-25.
-State at the end of this section (checkpoint at `280fa35`): typecheck clean,
-**644 tests in 48 files**; Playwright **54 tests**; GitHub Actions green
-(Node 20, Node 22, Playwright). RBAC Phases 1–6 and Phase 7 with its
-follow-ups are complete; no Phase 8 has started.
+State at the end of this section: typecheck clean, **730 tests in 52 files**;
+Playwright **54 tests** (unchanged by Phase 8); GitHub Actions green at the
+checkpoint `980fa23` (Node 20, Node 22, Playwright). RBAC Phases 1–6,
+Phase 7 with its follow-ups, and the Phase 8 Knowledge Base foundation are
+complete; later Knowledge Base phases have not started.
+
+### Added — Phase 8: Knowledge Base foundation (2026-09-25)
+- One canonical Knowledge Base repository (`artifacts/api-server/src/knowledge/`)
+  for every future consumer — article browsing, Case recommendations and the
+  Knowledge Assistant. **One article per jurisdiction per entity type**;
+  Formation, Registered Agent, Annual Report… are sections, not articles.
+- Typed model: entity type (`llc`, `corporation` reserved), 51
+  jurisdictions, article type, status (`draft|published|archived`, where
+  published = available internally), audience (`internal` only),
+  provenance (source document, pages, internal-only, not counsel-reviewed),
+  ordered sections with stable ids (`<articleId>:<key>`), citations and
+  content hashes, source flags (`state_requirement`, `client_disclosure`
+  required/recommended, `known_service_gap`, `open_research_item`,
+  `source_discrepancy`), topics, service keys and an evidence-backed
+  service profile (formation fulfillment, RA provider, renewal cadence/due
+  date/fulfillment, add-on count).
+- Five LLC pilot articles — Arizona, California, Delaware, Florida, Wyoming —
+  generated verbatim from `LLC-Formation-Services-by-State.pdf` (all nine
+  standard sections plus each entry's highlighted box). Arizona's publication
+  Open Research Item stays unverified. The document's own notices
+  (confidential internal reference, not counsel-reviewed, BOI delivery risk,
+  etc.) are kept on the source record.
+- Deterministic validation at startup: section order and completeness, flags
+  that agree with the printed headings, topics/services/profile values
+  supported by their section's text, one article per jurisdiction/entity,
+  no provenance claims beyond the source.
+- Read-only API: `GET /api/knowledge/articles` (filters: entityType,
+  jurisdiction, status, topic, flag, q) and
+  `GET /api/knowledge/articles/:idOrSlug`, both behind the existing
+  `knowledge.view` permission (description now "Read the internal Knowledge
+  Base"; grants unchanged). 67 API routes.
+- Storage: none in `store.json` — no collection, no schema change, no
+  migration; the live store is untouched.
+- Not included (deferred): the other 46 LLC jurisdictions, Corporation
+  articles, any Knowledge Base UI, Case recommendations, embeddings, RAG,
+  LLM calls, editing.
+- Tests: +86 (model rules, pilot content re-checked word for word against a
+  raw PDF extract, API filters/lookup/access, pre-Phase-8 store loads
+  unchanged). 730 total. No frontend change, so no new Playwright tests.
 
 ### Documentation — checkpoint handoff (2026-09-25)
 - CLAUDE_HANDOFF.md re-synchronized with the code at `280fa35`: a "Start

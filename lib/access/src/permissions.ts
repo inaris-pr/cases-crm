@@ -97,7 +97,7 @@ export const PERMISSIONS = {
   "metrics.people": def("metrics", true, "Employee (HR) figures on the dashboard"),
 
   "messages.use": def("communication", false, "Use internal messages"),
-  "knowledge.view": def("communication", false, "Open the Knowledge Base link"),
+  "knowledge.view": def("communication", false, "Read the internal Knowledge Base"),
 
   "accounting.view": def("accounting", false, "Accounting ledger and statements"),
   "accounting.payroll.view": def("accounting", false, "Accounting → Payroll"),

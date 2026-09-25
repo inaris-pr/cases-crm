@@ -4,22 +4,24 @@
 re-discovering the repository. If you change the architecture, update this
 file in the same change.
 
-**Checkpoint — 2026-09-25.** Synchronized with the code at `280fa35`
-("Phase 7 Thread follow-up: newest activity first"), which is also
-`origin/main` (local `main` level with the remote before this documentation
-commit). Default branch `main`; private remote `inaris-pr/cases-crm`.
+**Updated — 2026-09-25, Phase 8 (Knowledge Base foundation).** Built on the
+checkpoint `980fa23` ("Checkpoint: sync handoff after Phase 7", = `origin/main`
+when Phase 8 began). Default branch `main`; private remote
+`inaris-pr/cases-crm`.
 
 | Gate | Baseline |
 |---|---|
 | `pnpm typecheck` | clean (api-server src + tests, web, lib/access, lib/db) |
-| `pnpm test` | **644 tests in 48 files**, all passing (Vitest + Supertest) |
-| `pnpm test:e2e` | **54 Playwright tests in 4 spec files**, all passing |
-| GitHub Actions | green: Node 20 and Node 22 typecheck + test, Playwright browser suite |
+| `pnpm test` | **730 tests in 52 files**, all passing (Vitest + Supertest) |
+| `pnpm test:e2e` | **54 Playwright tests in 4 spec files** (unchanged by Phase 8 — no frontend change) |
+| GitHub Actions | green at `980fa23`: Node 20 and Node 22 typecheck + test, Playwright browser suite |
 
 **Status:** RBAC Phases 1–6 and Phase 7 (case lifecycle, categories,
-escalations) are complete, including the Phase 7 follow-ups (Category on the
-Board's New Case popup; the Case Thread as a unified, immutable,
-newest-first operational timeline). **No Phase 8 has started.** Automations
+escalations — with its follow-ups: Category on the Board's New Case popup,
+the unified newest-first Case Thread) are complete. **Phase 8 — Knowledge
+Base foundation** is implemented (backend/content only: canonical article
+model, five LLC pilot articles, read API; §2 Knowledge Base). **No Knowledge
+Base UI, Case recommendations or Knowledge Assistant exist yet.** Automations
 can be configured but are **never executed**.
 
 ---
@@ -37,6 +39,8 @@ covers:
   documents, call/contact logs, comments, automations (configuration only)
   and a unified **Thread** timeline
 - **Messages** (DMs/groups, case tags, @mentions)
+- **Knowledge Base** (Phase 8, API only): one internal article per
+  jurisdiction per entity type; five LLC pilot articles
 - permission-composed **Dashboards** per role
 - **Insights** (case analytics), **Accounting** (prototype data only),
   **Settings** (mostly prototype; access-gated)
@@ -56,6 +60,7 @@ covers:
 | Case status history, closedAt, resolution, escalations | `src/caseLifecycle.ts` |
 | Derived "last activity" | `src/caseActivity.ts` |
 | Case Thread feed | `src/caseFeed.ts` (web: `components/cases/CaseFeed.tsx`) |
+| Knowledge Base model, validation, content, repository, read API | `artifacts/api-server/src/knowledge/*` (content is source-controlled, not in `store.json`) |
 | Web routing / Records tabs / session landing | `cases/src/App.tsx`, `lib/records.ts`, `lib/session.ts` |
 | Web API types (duplicated by design) | `cases/src/lib/api.ts` |
 
@@ -110,6 +115,8 @@ Since recovery (2026-09-22 → 2026-09-25, see CHANGELOG.md):
 | RBAC Phase 6 | Personalized role dashboards: `GET /api/dashboard` with permission-gated, scope-computed sections; widget registry by permission; derived case last activity (§2 Dashboards) |
 | Phase 7 | Case categories, status history with real closedAt / reopen, resolution time, manual escalations with history; filters and dashboard integration; no migration (§2 Case lifecycle) |
 | Phase 7 follow-ups | Category on the Board's New Case popup; the Case Thread as a unified timeline of comments + system activity (§2 Case Thread) |
+| `980fa23` | Checkpoint: handoff/docs synchronized after Phase 7 |
+| Phase 8 | Knowledge Base foundation: canonical article model, validation, five source-controlled LLC pilot articles (AZ, CA, DE, FL, WY), read-only API under `knowledge.view`; no UI (§2 Knowledge Base) |
 
 ---
 
@@ -629,6 +636,95 @@ comments only; posting comments (and @-mentions) is unchanged.
 - **Calls have no duration field**, so call cards show time, who and
   contact but no duration.
 
+### Knowledge Base foundation (Phase 8)
+
+Backend and content only — **no UI, no Case recommendations, no chatbot, no
+embeddings, no LLM calls**. Code in `artifacts/api-server/src/knowledge/`.
+
+- **One canonical repository** (`repository.ts` → `knowledgeBase`). The
+  future article browser, Case recommendations and the Knowledge Assistant
+  (hybrid RAG, in Messages as a "DMs | Knowledge Assistant" switch) must all
+  read these same records. Do not build a second article store.
+- **Granularity: ONE article per jurisdiction per entity type**
+  ("California — LLC Services & Requirements"). Formation, Registered Agent,
+  Annual Report… are **sections** of that article, never separate articles.
+  A retrieval pipeline may later chunk by section; chunks are not articles.
+  Validation rejects a second article for the same
+  (entityType, jurisdiction, articleType).
+- **Model** (`model.ts`): `KnowledgeArticle` = id, slug, title, entityType
+  (`llc` | `corporation`), jurisdictionCode/Name (51-jurisdiction table),
+  articleType (`state_services`), status (`draft|published|archived`),
+  audience (`internal` — the only value), `internalOnly`, `counselReviewed`,
+  `lastReviewedAt` (null = none recorded), createdAt/updatedAt, provenance
+  (sourceId, pages, printed entry header, Contents-page highlight marker),
+  aliases, `serviceProfile`, ordered `sections`, plus derived topics,
+  serviceKeys and `flagSummary`.
+- **Section**: stable id `<articleId>:<key>` (e.g.
+  `llc-az-state-services:open_research_item_publication`), key, label,
+  `sourceHeading` (as printed), order, kind (`standard` ×8,
+  `state_specific` = the ninth section, `highlighted` = shaded boxes), flag,
+  clientDisclosure, verification, highlightCategory, notApplicable, verbatim
+  content, sourcePages, topics, serviceKeys, `citation`
+  ("Arizona — LLC Services & Requirements → Open Research Item — Publication")
+  and `contentHash` (sha256; a later indexer re-embeds only changed sections).
+- **Flags** (what the SOURCE says a section is): `none`,
+  `state_requirement`, `client_disclosure` (+ `required`|`recommended`, as the
+  source distinguishes), `known_service_gap` (a defect in OUR catalog),
+  `open_research_item`, `source_discrepancy`. **An Open Research Item is
+  always `verification: "unverified"`** — the only unverified sections — and
+  must never be presented as a confirmed requirement. A highlighted title the
+  source does not list (Florida's "Fees and Late Penalty") is kept as written
+  with highlightCategory `unlisted`.
+- **Status semantics:** `published` = available INTERNALLY to employees with
+  `knowledge.view`. It never means customer-facing or counsel-approved; every
+  article is `audience: "internal"`, `internalOnly: true`,
+  `counselReviewed: false` because its source says so.
+- **Source fidelity.** The only source for LLC content is
+  `LLC-Formation-Services-by-State.pdf` (Cloud Peak Law — Company Sage,
+  prepared 2026-09-10, sha256 `308c346e…3c241b8d`; 106 content pages — the
+  file's pages 107–316 carry only a header and footer). Section text is
+  copied verbatim (pdftotext `-raw`, lines joined with one space;
+  `content/llcPilot.ts` is generated by
+  `scripts/knowledge/generate_llc_pilot.py <path-to-pdf>` (needs poppler
+  `pdftotext`; the PDF is not committed) — do not hand-edit prose). Nothing is
+  corrected, reconciled with other sources, completed or merged with
+  Corporation rules. `content/llcSource.ts` keeps the document's own notices
+  verbatim (confidentiality, N/A meaning, service gaps vs research items,
+  fulfillment, data origin, filing fees, services not provided, BOI delivery
+  risk).
+- **Validation** (`validate.ts`, runs at startup — invalid content refuses to
+  load): canonical nine sections in the source's order, then only
+  highlighted boxes; order numbers; N/A marker; flags agree with the printed
+  heading; open research items unverified; **every topic and service key is
+  supported by its own section's text** (evidence patterns in `model.ts`);
+  every `serviceProfile` value quotes its section verbatim; the article can
+  claim no more than its source (internal-only, not counsel-reviewed);
+  unique id/slug/identity.
+- **Pilot content (five LLC articles):** Arizona, California, Delaware,
+  Florida, Wyoming — `published`. Highlighted: AZ "Open Research Item —
+  Publication"; CA "Franchise Tax — Client Disclosure Required"; DE "Annual
+  Tax"; FL "Fees and Late Penalty — Client Disclosure Recommended"; WY none.
+  State-specific section is "N/A" for DE and FL.
+- **Storage:** none in `store.json`. Articles are code-reviewed,
+  source-controlled content, built into a frozen in-memory repository at
+  startup — no collection, no seq counter, no schema version, no migration.
+  When editing arrives (`knowledge.manage`, not yet defined), move the same
+  record shape into a store collection or database.
+- **API** (read-only, `knowledge.view`): `GET /api/knowledge/articles`
+  (filters `entityType`, `jurisdiction` (any case), `status`, `topic`,
+  `flag`, `q` — a plain all-words match per section; unknown parameters or
+  values → 400) returns summaries with the section outline;
+  `GET /api/knowledge/articles/:idOrSlug` returns the full article with its
+  source record. Readers see only `published` articles; anything else is 404.
+- **RBAC:** reuses the existing `knowledge.view` (every operational role incl.
+  HR; reserved roles none — unchanged matrix). No new permission.
+- **Corporation later:** `entityType: "corporation"` is in the model; its
+  section template is defined only when
+  `Corporations-51-Jurisdiction-Reference.pdf` is ingested (validation refuses
+  corporation articles until then). Titles/ids never collide with LLC ones.
+- **Future Case matching** can key on entityType, jurisdictionCode, topics,
+  serviceKeys, flags and serviceProfile; nothing is connected to Cases yet.
+
 ### Domain model
 
 - **Account** — a company; ~46 Salesforce-style entity-formation fields.
@@ -663,7 +759,7 @@ Robert Chen). Never use one where the other belongs — see §3.4.
 
 ### API
 
-**65 routes** under `/api` (the reviewed table in
+**67 routes** under `/api` (the reviewed table in
 `test/route-guards.test.ts` must list every one): auth (login, logout, me);
 cases (list with status/priority/search/assignee/account/contact/**category**/
 **escalated** filters, create, detail with `statusHistory`/`escalations`/
@@ -674,8 +770,9 @@ and `GET|POST /cases/:id/thread` (comments); `GET|POST /cases/:id/contacts`
 account-contacts; leads incl. convert; reassignment
 `PUT /{cases|leads|accounts|contacts}/:id/owner` and
 `GET /owners/{type}/candidates`; mentions; team; `GET /dashboard`; stats;
-conversations + messages; **automations** (10 routes, §3.1); and the
-`/customers` compatibility shim (§6.1).
+conversations + messages; **automations** (10 routes, §3.1); the
+`/customers` compatibility shim (§6.1); and the read-only **Knowledge Base**
+(`GET /knowledge/articles`, `GET /knowledge/articles/:idOrSlug`, Phase 8).
 
 ---
 
@@ -875,13 +972,14 @@ against the ten keys; `null`/omitted = uncategorized.
 | Case automations | Management as in §3.1; **no execution** |
 | Mentions | `@Name` in comments, resolved server-side to active employees who may view the case; your own inbox only |
 | Messages | DMs, groups, case tagging (filtered by case access), soft delete by the author; member-only |
+| Knowledge Base | **API only** (Phase 8): five internal LLC pilot articles, list/filter/read; no UI yet |
 | Insights | Case analytics off `/stats` and `/cases` (`insights.cases.view`); Sales and People domains planned |
 | Accounting | **Prototype data only** (visibility gated: statements vs Payroll) |
 | Settings | Mostly prototype UI (local state), sections gated by permission |
 
 ### Test coverage
 
-`pnpm test`: Vitest + Supertest, **48 files / 644 tests** in
+`pnpm test`: Vitest + Supertest, **52 files / 730 tests** in
 `artifacts/api-server/test/`. Covers authentication (passwords, sessions,
 expiry, revocation, throttling, spoofing, same-origin, the 401 on every
 route), the permission core (the approved matrix cell by cell, resolver,
@@ -892,7 +990,10 @@ mentions), stable ownership (v1/v2 migrations, refusal on unmapped/ambiguous
 names, rename safety), team scope and reassignment, dashboards (scope, no
 leakage, zeros), case lifecycle/categories/escalations, the Thread feed
 (merging, newest-first order, ties, immutability, call aggregation,
-mentions, RBAC), a pre-Phase-7 store loading without migration, and the API
+mentions, RBAC), a pre-Phase-7 store loading without migration, the
+Knowledge Base (model rules, the five pilot articles re-checked word for word
+against a raw extract of the source PDF in `test/fixtures/`, the read API
+and its access, a pre-Phase-8 store loading unchanged), and the API
 end to end — plus pure frontend modules imported directly (`lib/records.ts`,
 `lib/caseLinks.ts`, `lib/caseSort.ts`, `lib/caseMeta.ts`, `lib/session.ts`).
 
@@ -934,8 +1035,13 @@ targeted Playwright suite.
   state-specific filing timelines; **no automatic escalation**.
 - **People management** — no UI to invite, deactivate, rename or change
   employees' roles/teams (planned sections stay hidden).
-- **AI layer** — case summaries, issue explanation, suggested replies. Nothing
-  references any LLM.
+- **AI layer** — case summaries, issue explanation, suggested replies, the
+  Knowledge Assistant (hybrid RAG over the Knowledge Base, with hand-off of an
+  unanswered question to a supervisor by DM). Nothing references any LLM; no
+  embeddings or vector store exist.
+- **Knowledge Base beyond the foundation** — the remaining 46 LLC
+  jurisdictions, Corporation articles, the article browser/reader UI, Case
+  recommendations, editing (`knowledge.manage`).
 - **Billing / payments** — no Stripe, refunds, chargebacks, revenue,
   commissions or goals.
 - **Phone system** — calls are logged by hand; no durations, recordings or
@@ -1074,6 +1180,12 @@ approval, and ends with typecheck, the unit/API suite, the Playwright suite
 and CI all green, committed separately and not pushed automatically.
 Candidate next phases (none started):
 
+0. **Phase 8B — remaining LLC articles**: generate the other 46 states + D.C.
+   from the same PDF with the Phase 8 extraction rules, classify the 16
+   remaining highlighted boxes (the source also uses titles such as "Annual
+   Certificate and Agent Fee" and "…— Verify Before Relying"), extend the
+   fidelity fixture, then the Knowledge Base reader UI, Case
+   recommendations and the Knowledge Assistant as separate approved steps.
 1. **People management** — invite/deactivate employees, assign roles and
    teams, rename (refreshing `ownerName` labels), backed by `people.*` and
    `settings.teams.*` permissions and the real `store.teams`.

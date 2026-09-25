@@ -49,6 +49,7 @@ import {
   statusHistory,
 } from "./caseLifecycle.js";
 import { buildCaseFeed, recordCaseActivity } from "./caseFeed.js";
+import { registerKnowledgeRoutes } from "./knowledge/routes.js";
 import {
   store,
   seed,
@@ -2648,6 +2649,9 @@ export function buildApiRouter(): Router {
       res.status(204).end();
     }),
   );
+
+  // ── Knowledge Base (Phase 8) — read-only, knowledge.view ────────────────────
+  registerKnowledgeRoutes(r);
 
   return r;
 }

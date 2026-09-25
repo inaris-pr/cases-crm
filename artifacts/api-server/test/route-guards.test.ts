@@ -95,6 +95,9 @@ const ACCESS: [string, string, Access][] = [
   ["GET", "/conversations/:id/messages", ["messages.use"]],
   ["POST", "/conversations/:id/messages", ["messages.use"]],
   ["DELETE", "/messages/:id", ["messages.use"]],
+  // Knowledge Base (Phase 8): read-only
+  ["GET", "/knowledge/articles", ["knowledge.view"]],
+  ["GET", "/knowledge/articles/:idOrSlug", ["knowledge.view"]],
 ];
 
 const key = (method: string, path: string) => `${method} ${path}`;
@@ -244,6 +247,8 @@ add("POST", "/conversations", () => "/conversations", (me) => ({ type: "dm", mem
 add("GET", "/conversations/:id/messages", () => `/conversations/${fx.convo}/messages`);
 add("POST", "/conversations/:id/messages", () => `/conversations/${fx.convo}/messages`, () => ({ content: "hi" }));
 add("DELETE", "/messages/:id", () => `/messages/${fx.msg}`);
+add("GET", "/knowledge/articles", () => "/knowledge/articles");
+add("GET", "/knowledge/articles/:idOrSlug", () => "/knowledge/articles/llc-ca-state-services");
 
 describe("role × route", () => {
   it("built its fixtures (so 404s below are about scope, not missing data)", () => {
