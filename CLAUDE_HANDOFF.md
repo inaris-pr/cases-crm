@@ -10,8 +10,8 @@ identity foundation** (and its browser-login fix) and **RBAC Phase 2 —
 permission core**, **RBAC Phase 3 — backend enforcement** and **RBAC Phase 4 —
 stable ownership ids and real team scope** and **RBAC Phase 5 — role-aware
 frontend** and **RBAC Phase 6 — personalized role dashboards** and **Phase 7 —
-case lifecycle, categories & escalations**. Typecheck clean; **614 tests
-across 46 files**, all passing; Playwright 47 tests. Default branch `main`, pushed to the private
+case lifecycle, categories & escalations**. Typecheck clean; **619 tests
+across 47 files**, all passing; Playwright 48 tests. Default branch `main`, pushed to the private
 remote `inaris-pr/cases-crm`.
 
 ---
@@ -271,7 +271,7 @@ same lib/access rules the API enforces (`@cases/access`, a Vite alias):
   (active, can view that record type, inside the caller's assign scope)
   and sends `{ ownerUserId }`.
 - **Dashboard**: replaced by the Phase 6 dashboards (below).
-- **Browser tests**: `e2e/` (Playwright, 47 tests, `pnpm test:e2e`) starts its
+- **Browser tests**: `e2e/` (Playwright, 48 tests, `pnpm test:e2e`) starts its
   own API (fresh temp store via `CASES_DATA_DIR`) and Vite on 3101/5174;
   CI job `e2e`. e2e/ is outside the pnpm workspace; `@playwright/test` is
   pinned exactly in `e2e/package.json` and locked by `e2e/package-lock.json`
@@ -351,7 +351,8 @@ from another and nothing is classified or escalated automatically.
   Dispute (a service dispute or complaint — NOT a card chargeback),
   `filing_correction` Filing Correction / Incorrect Filing,
   `partner_issue` Partner Issue, `account_portal` Account / Portal. Set on
-  New Case (all three contexts) or edited on Case Detail with `cases.edit`.
+  New Case (all three contexts, and the Board's own New Case popup) or
+  edited on Case Detail with `cases.edit`.
   Tags stay free-form. Existing Cases are never auto-categorized. The web
   app mirrors the list in `cases/src/lib/caseMeta.ts`
   (`test/case-meta.test.ts` keeps them identical).
@@ -630,7 +631,7 @@ alias for `accountId`.
 
 ### Test coverage
 
-`pnpm test`: Vitest + Supertest, **46 files / 614 tests** in
+`pnpm test`: Vitest + Supertest, **47 files / 619 tests** in
 `artifacts/api-server/test/`. Covers stable ownership (v2 migration,
 refusal on unmapped/ambiguous names, rename safety, spoofing, history),
 team scope and reassignment, authorization (every route declared,
@@ -712,7 +713,9 @@ contact; only `primaryContactId` is authoritative.
 - **Duplicate case creation on the Board:** `NewCaseModalForClient` in
   `CasesBoard.tsx` is a separate form. It posts `customerId` only, so cases
   created from the Board **never get a primary contact**, and it bypasses the
-  shared `NewCaseDrawer`.
+  shared `NewCaseDrawer`. (Phase 7 follow-up: it does offer the optional
+  Category, from the shared `lib/caseMeta.ts` list — keep new Case fields
+  in both forms until they are merged.)
 - `components/layout/MessagesWidget.tsx` (998) and `pages/Messages.tsx` (394)
   overlap; `/messages` is routed but not in the sidebar.
 

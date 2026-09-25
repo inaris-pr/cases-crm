@@ -51,6 +51,31 @@ test.describe("category", () => {
   });
 });
 
+test.describe("Board New Case", () => {
+  test("Records → Cases → Board creates a Case with a Category that persists", async ({ page }) => {
+    await login(page, EMAIL.systemOwner);
+    await page.goto("/records/cases");
+    await page.getByRole("button", { name: "Board", exact: true }).click();
+    await page.getByTestId("board-new-case").click();
+    const title = `P7 board ${Date.now()}`;
+    await page.getByTestId("board-new-case-title").fill(title);
+    await expect(page.getByTestId("board-new-case-category").locator("option")).toHaveCount(11); // Uncategorized + 10
+    await page.getByTestId("board-new-case-category").selectOption({ label: "EIN / Tax" });
+    await page.getByTestId("board-new-case-save").click();
+    await expect(page.getByTestId("board-new-case-title")).toHaveCount(0); // popup closed
+    // The board refreshes and shows the new Case with its category.
+    await expect(page.getByText(title)).toBeVisible();
+
+    const found = await (await page.request.get(`/api/cases?search=${encodeURIComponent(title)}`)).json();
+    expect(found).toHaveLength(1);
+    expect(found[0].category).toBe("ein_tax");
+    await page.goto(`/cases/${found[0].id}`);
+    await page.reload();
+    await expect(page.getByTestId("case-category-select")).toHaveValue("ein_tax");
+    await expect(page.getByTestId("case-category-chip")).toContainText("EIN / Tax");
+  });
+});
+
 test.describe("escalations", () => {
   test("a CSR escalates a colleague's Case but cannot resolve it; her supervisor resolves it; history remains", async ({ page }) => {
     await login(page, SARA);

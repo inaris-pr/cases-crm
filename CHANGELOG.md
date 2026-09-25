@@ -10,8 +10,18 @@ recovered working tree — the project had no repository, so there is no history
 ## [Unreleased]
 
 Everything since the recovery release, 2026-09-22 → 2026-09-24.
-State at the end of this section: typecheck clean, **614 tests in 46 files**;
-Playwright 47 tests.
+State at the end of this section: typecheck clean, **619 tests in 47 files**;
+Playwright 48 tests.
+
+### Fixed — Phase 7 follow-up: Category on the Board's New Case popup (2026-09-25)
+- Records → Cases → Board's own New Case popup now offers the same optional
+  Category (options from the shared `lib/caseMeta.ts`), sent through the
+  same `POST /api/cases` validation. Everything else about the popup is
+  unchanged (account from the selected board card, status pills, fixed
+  medium priority, board refresh).
+- Tests: 5 API/unit tests (the popup's request shape with a valid, missing,
+  null and invalid category; one taxonomy in the web app) and 1 Playwright
+  test (create on the Board, reload, category persisted).
 
 ### Added — Phase 7: case lifecycle, categories & escalations (2026-09-24)
 - **Category**: one optional primary category per Case (10 approved keys,

@@ -22,6 +22,7 @@ import {
 import { API, fetchJson } from "@/lib/api";
 import type {
   Case,
+  CaseCategory,
   CaseStatus,
   CaseWithCustomer,
   CustomerWithCounts,
@@ -29,6 +30,7 @@ import type {
 import { Input, Label, Select, Textarea } from "@/components/ui/Input";
 import { PriorityBadge } from "@/components/ui/Badge";
 import { CategoryChip, EscalationMarker } from "@/components/cases/CaseLifecycle";
+import { CASE_CATEGORY_OPTIONS } from "@/lib/caseMeta";
 import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/Button";
 import { CaseDetailModal } from "@/components/CaseDetailModal";
@@ -341,6 +343,7 @@ export function CasesBoard() {
               }}
               className="rounded-full bg-[var(--color-primary)] text-[var(--color-primary-foreground)] grid place-items-center hover:brightness-110 active:scale-95 transition-all group"
               title={`New case for ${customer.name}`}
+              data-testid="board-new-case"
             >
               <Plus size={26} strokeWidth={2.5} />
               <span
@@ -765,6 +768,9 @@ function NewCaseModalForClient({
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [status, setStatus] = useState<CaseStatus>("intake");
+  // Phase 7: optional primary category ("" = uncategorized), from the one
+  // shared list in lib/caseMeta.ts.
+  const [category, setCategory] = useState<CaseCategory | "">("");
 
   // Reset every time the modal opens.
   useEffect(() => {
@@ -772,6 +778,7 @@ function NewCaseModalForClient({
       setTitle("");
       setDescription("");
       setStatus("intake");
+      setCategory("");
     }
   }, [open]);
 
@@ -786,6 +793,7 @@ function NewCaseModalForClient({
           customerId: customer.id,
           priority: "medium",
           tags: [],
+          ...(category ? { category } : {}),
         }),
       }),
     onSuccess: () => {
@@ -815,6 +823,7 @@ function NewCaseModalForClient({
         <div>
           <Label>Case title *</Label>
           <Input
+            data-testid="board-new-case-title"
             value={title}
             onChange={(e) => setTitle(e.target.value)}
             placeholder="e.g. EIN Submission, Credit Dispute, Document Review…"
@@ -865,11 +874,26 @@ function NewCaseModalForClient({
             })}
           </div>
         </div>
+        <div>
+          <Label>Category (optional)</Label>
+          <Select
+            data-testid="board-new-case-category"
+            value={category}
+            onChange={(e) => setCategory(e.target.value as CaseCategory | "")}
+          >
+            <option value="">Uncategorized</option>
+            {CASE_CATEGORY_OPTIONS.map((o) => (
+              <option key={o.key} value={o.key}>
+                {o.label}
+              </option>
+            ))}
+          </Select>
+        </div>
         <div className="grid grid-cols-2 gap-3 pt-2">
           <Button variant="secondary" type="button" onClick={onClose}>
             Cancel
           </Button>
-          <Button type="submit" disabled={!canSave}>
+          <Button type="submit" disabled={!canSave} data-testid="board-new-case-save">
             {create.isPending ? "Saving…" : "Save case"}
           </Button>
         </div>
