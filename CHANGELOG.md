@@ -10,11 +10,41 @@ recovered working tree — the project had no repository, so there is no history
 ## [Unreleased]
 
 Everything since the recovery release, 2026-09-22 → 2026-09-25.
-State at the end of this section: typecheck clean, **761 tests in 53 files**;
-Playwright **54 tests** (unchanged by Phase 8); GitHub Actions green at the
-checkpoint `980fa23` (Node 20, Node 22, Playwright); `e6035cc` is pushed. RBAC Phases 1–6, Phase 7 with its
-follow-ups, and the Phase 8 Knowledge Base foundation with its 8A follow-up
-are complete; later Knowledge Base phases have not started.
+State at the end of this section: typecheck clean, **778 tests in 54 files**;
+Playwright **67 tests**; GitHub Actions green at `598a0ec` (Node 20, Node 22,
+Playwright). RBAC Phases 1–6, Phase 7 with its follow-ups, the Phase 8
+Knowledge Base foundation with its 8A follow-up, and the Phase 8B Knowledge
+Base UI are complete; Case recommendations (8C) and the Knowledge Assistant
+have not started.
+
+### Added — Phase 8B: Knowledge Base UI (2026-09-25)
+- **Knowledge** in the sidebar for every employee with `knowledge.view`
+  (the old external-link placeholder and `VITE_KNOWLEDGE_BASE_URL` are
+  removed). Routes `/knowledge` and `/knowledge/:slug` are guarded by the
+  existing route guard: without the permission, No Access renders before
+  the page mounts and nothing is fetched. Read-only; five LLC pilot
+  articles only.
+- `/knowledge`: search plus Entity type / State / Topic filters (options
+  only from articles that exist), kept in the URL so refresh and Back work.
+  Search and topic use effective metadata; each result says whether it
+  matched the state's own text or a national shared service ("not printed
+  in this state's entry"), and flags a searched-for disputed service as a
+  source discrepancy. A miss reads "No Knowledge Base articles match your
+  search." — never that a service is unavailable.
+- `/knowledge/:slug`: header with source document, date, pages and review
+  status; the source's own confidentiality notice as an "Internal
+  reference" strip; sections in stored order with page numbers and
+  `#section` anchors; a table of contents. Open Research Items read as
+  unresolved, Known Service Gaps / Client disclosures (Required vs
+  Recommended) / State requirements are distinctly marked. Separate panels
+  for shared services (inherited ones with their national source citation
+  and quote; directly printed ones collapsed), source discrepancies (both
+  quotes, "not confirmed") and services the source says are not offered
+  here. Unknown services are not listed and never shown as "no".
+- Pure `lib/knowledge.ts` holds the web types and presentation rules; its
+  topic/service labels are checked against the API vocabularies.
+- Tests: +17 API/unit (778), +13 Playwright (67; RBAC sidebar expectations
+  now include Knowledge). No API, store, schema or content change.
 
 ### Added — Phase 8A follow-up: shared/national services (2026-09-25)
 - The Knowledge Base now separates **direct** content (printed in a

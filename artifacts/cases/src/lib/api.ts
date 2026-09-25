@@ -8,6 +8,12 @@ export type { EffectivePermissions, RoleKey } from "@cases/access";
 // Phase 7 taxonomy keys live in the pure lib/caseMeta.ts.
 import type { CaseCategory, EscalationReason } from "./caseMeta";
 export type { CaseCategory, EscalationReason };
+// Knowledge Base response types live beside their presentation rules in the pure lib/knowledge.ts.
+export type {
+  KnowledgeArticleDetail,
+  KnowledgeArticleSummary,
+  KnowledgeListResponse,
+} from "./knowledge";
 
 const BASE = (import.meta.env.BASE_URL ?? "/").replace(/\/$/, "");
 export const API = (path: string) => `${BASE}${path}`;

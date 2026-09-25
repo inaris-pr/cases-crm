@@ -4,18 +4,17 @@
 re-discovering the repository. If you change the architecture, update this
 file in the same change.
 
-**Updated — 2026-09-25, Phase 8A follow-up (shared/national services).**
-Built on `e6035cc` ("Phase 8: Knowledge Base foundation (LLC pilot)", =
-`origin/main` when the follow-up began; Phase 8 itself built on the
-checkpoint `980fa23`). Default branch `main`; private remote
+**Updated — 2026-09-25, Phase 8B (Knowledge Base UI).** Built on `598a0ec`
+("Phase 8A follow-up: shared/national services vs jurisdiction content", =
+`origin/main`, CI green per the owner). Default branch `main`; private remote
 `inaris-pr/cases-crm`.
 
 | Gate | Baseline |
 |---|---|
 | `pnpm typecheck` | clean (api-server src + tests, web, lib/access, lib/db) |
-| `pnpm test` | **761 tests in 53 files**, all passing (Vitest + Supertest) |
-| `pnpm test:e2e` | **54 Playwright tests in 4 spec files** (unchanged by Phase 8 and its follow-up — no frontend change) |
-| GitHub Actions | green at `980fa23` (owner-confirmed); `e6035cc` is on `origin/main` — its CI result was not visible from this session. Jobs: Node 20 and Node 22 typecheck + test, Playwright browser suite |
+| `pnpm test` | **778 tests in 54 files**, all passing (Vitest + Supertest) |
+| `pnpm test:e2e` | **67 Playwright tests in 5 spec files** (13 new in `knowledge.spec.ts`) |
+| GitHub Actions | green at `598a0ec` (owner-confirmed). Jobs: Node 20 and Node 22 typecheck + test, Playwright browser suite |
 
 **Status:** RBAC Phases 1–6 and Phase 7 (case lifecycle, categories,
 escalations — with its follow-ups: Category on the Board's New Case popup,
@@ -23,8 +22,10 @@ the unified newest-first Case Thread) are complete. **Phase 8 — Knowledge
 Base foundation** is implemented (backend/content only: canonical article
 model, five LLC pilot articles, read API; §2 Knowledge Base), plus the
 **8A follow-up**: explicit shared/national service rules with provenance,
-and direct vs inherited vs effective service metadata. **No Knowledge
-Base UI, Case recommendations or Knowledge Assistant exist yet.** Automations
+and direct vs inherited vs effective service metadata, and **Phase 8B —
+Knowledge Base UI** (read-only `/knowledge` and `/knowledge/:slug`; §2
+Knowledge Base UI). **No Case recommendations or Knowledge Assistant exist
+yet; articles are not editable.** Automations
 can be configured but are **never executed**.
 
 ---
@@ -42,8 +43,8 @@ covers:
   documents, call/contact logs, comments, automations (configuration only)
   and a unified **Thread** timeline
 - **Messages** (DMs/groups, case tags, @mentions)
-- **Knowledge Base** (Phase 8, API only): one internal article per
-  jurisdiction per entity type; five LLC pilot articles
+- **Knowledge Base** (Phase 8/8B): one internal article per jurisdiction per
+  entity type; five LLC pilot articles; read-only search and reader UI
 - permission-composed **Dashboards** per role
 - **Insights** (case analytics), **Accounting** (prototype data only),
   **Settings** (mostly prototype; access-gated)
@@ -64,6 +65,7 @@ covers:
 | Derived "last activity" | `src/caseActivity.ts` |
 | Case Thread feed | `src/caseFeed.ts` (web: `components/cases/CaseFeed.tsx`) |
 | Knowledge Base model, validation, content, repository, read API | `artifacts/api-server/src/knowledge/*` (content is source-controlled, not in `store.json`) |
+| Knowledge Base UI (pages, presentation rules) | `cases/src/pages/Knowledge*.tsx`, `cases/src/lib/knowledge.ts` |
 | Web routing / Records tabs / session landing | `cases/src/App.tsx`, `lib/records.ts`, `lib/session.ts` |
 | Web API types (duplicated by design) | `cases/src/lib/api.ts` |
 
@@ -121,6 +123,7 @@ Since recovery (2026-09-22 → 2026-09-25, see CHANGELOG.md):
 | `980fa23` | Checkpoint: handoff/docs synchronized after Phase 7 |
 | Phase 8 | Knowledge Base foundation: canonical article model, validation, five source-controlled LLC pilot articles (AZ, CA, DE, FL, WY), read-only API under `knowledge.view`; no UI (§2 Knowledge Base) |
 | Phase 8A follow-up | Shared/national service rules with provenance; direct vs inherited vs effective service availability; unresolved source discrepancies (§2 Knowledge Base) |
+| Phase 8B | Knowledge Base UI: sidebar Knowledge, `/knowledge` search/filters, `/knowledge/:slug` reader with flagged sections, shared-service / discrepancy / not-offered panels; read-only (§2 Knowledge Base UI) |
 
 ---
 
@@ -397,8 +400,8 @@ same lib/access rules the API enforces (`@cases/access`, a Vite alias):
   `NoRoleAccess`; every route is checked with `canOpenRoute` BEFORE its
   page mounts — refused routes show `NoAccess` and fetch nothing;
   `/records` opens the first permitted tab.
-- **Sidebar** ← `visibleNavItems` (Messages entry; Knowledge Base only when
-  `VITE_KNOWLEDGE_BASE_URL` is set); the account chip opens `/account`
+- **Sidebar** ← `visibleNavItems` (Messages entry; Knowledge — in-app since
+  Phase 8B — for `knowledge.view`); the account chip opens `/account`
   (personal settings; API Keys only with `system.integrations.manage`).
 - **Sections**: Records tabs, Accounting tabs (statements need
   `accounting.view`, Payroll `accounting.payroll.view`; still prototype
@@ -417,22 +420,22 @@ same lib/access rules the API enforces (`@cases/access`, a Vite alias):
 
   | Role | Sidebar | Records tabs |
   |---|---|---|
-  | CSR, Operations Admin | Dashboard, Records, Messages | Accounts, Clients, Cases |
-  | CSR Supervisor, Ops Admin Supervisor | Dashboard, Records, Insights, Messages, Settings | Accounts, Clients, Cases |
-  | Business Advisor | Dashboard, Leads, Records, Messages | Accounts, Clients (never Cases) |
-  | BA Supervisor | Dashboard, Leads, Records, Messages, Settings | Accounts, Clients |
-  | HR | Dashboard, Messages, Accounting (Payroll only), Settings (Divisions) | none |
+  | CSR, Operations Admin | Dashboard, Records, Messages, Knowledge | Accounts, Clients, Cases |
+  | CSR Supervisor, Ops Admin Supervisor | Dashboard, Records, Insights, Messages, Knowledge, Settings | Accounts, Clients, Cases |
+  | Business Advisor | Dashboard, Leads, Records, Messages, Knowledge | Accounts, Clients (never Cases) |
+  | BA Supervisor | Dashboard, Leads, Records, Messages, Knowledge, Settings | Accounts, Clients |
+  | HR | Dashboard, Messages, Knowledge, Accounting (Payroll only), Settings (Divisions) | none |
   | System Owner | everything | all three |
   | reserved roles | none — a No-access screen | — |
 
-  Knowledge Base appears only when `VITE_KNOWLEDGE_BASE_URL` is set. Leads:
+  Knowledge (Phase 8B) needs `knowledge.view`, which every operational role holds. Leads:
   Business Advisors, BA Supervisors, System Owner only. Settings: Danger zone
   and company settings are System Owner only; Invite users stays hidden
   until a People phase. Typing a forbidden URL (e.g. a CSR at `/leads`, HR at
   `/cases/1`) shows **No access** before the page mounts, so nothing is
   fetched. Sign-in always lands on the Dashboard and clears cached data, so
   a previous employee's navigation never shows.
-- **Browser tests**: `e2e/` (Playwright, 54 tests, `pnpm test:e2e`) starts its
+- **Browser tests**: `e2e/` (Playwright, 67 tests, `pnpm test:e2e`) starts its
   own API (fresh temp store via `CASES_DATA_DIR`) and Vite on 3101/5174;
   CI job `e2e`. e2e/ is outside the pnpm workspace; `@playwright/test` is
   pinned exactly in `e2e/package.json` and locked by `e2e/package-lock.json`
@@ -813,6 +816,62 @@ distinction lives in metadata with a citation path.
   restricted (cite the rule) / disputed (show both claims) / unknown (say
   so) — never turn silence or a dispute into a yes or a no.
 
+### Knowledge Base UI (Phase 8B)
+
+Read-only employee UI over the same repository — **five LLC pilot articles
+only; no editing, no Case integration, no chatbot.**
+
+- **Routes** (`App.tsx`, guarded by `ROUTE_ACCESS` in lib/access, both
+  `knowledge.view`): `/knowledge` (discovery/search; filters in the URL —
+  `?q=&entityType=&jurisdiction=&topic=` — typing replaces the history
+  entry, choosing a filter adds one so Back undoes it) and
+  `/knowledge/:slug` (reader; `#<section key>` anchors, honoured on load
+  and refresh). Without the permission: no sidebar entry and No Access
+  before the page mounts, so no `/api/knowledge` request is made.
+- **Sidebar:** the `knowledge` nav item is now in-app ("Knowledge",
+  `/knowledge`, `knowledge.view`); the old external-link placeholder and
+  `VITE_KNOWLEDGE_BASE_URL` are gone. Every operational role (incl. HR)
+  sees it; reserved roles get no application.
+- **Files:** `pages/Knowledge.tsx`, `pages/KnowledgeArticle.tsx`,
+  `components/knowledge/parts.tsx` (chips/tones), and the pure
+  `lib/knowledge.ts` — API response types (re-exported from `lib/api.ts`),
+  topic/service labels mirrored from the API (agreement tested in
+  `test/knowledge-ui.test.ts`) and every presentation rule.
+- **Discovery:** search box + Entity type / State / Topic selects whose
+  options come only from articles that exist (LLC is the only entity type;
+  no placeholder states). Results are compact rows: state code, title,
+  entity type, section count, "Internal", highlighted-section chips. Search
+  and topic use the API's EFFECTIVE metadata; each result explains its
+  match — "Matched in: <sections>" (printed text) vs "Matched through
+  national shared service — X (not printed in this state's entry)"; a query
+  naming a disputed service shows "Source discrepancy — X (not confirmed)".
+  Empty: "No Knowledge Base articles match your search." plus "not that a
+  service is unavailable".
+- **Reader:** header (title, state, entity type, source document, publisher,
+  prepared date, source pages, "Not reviewed by counsel", "No internal
+  review recorded") and the source's own confidentiality notice verbatim as
+  the "Internal reference" strip. Sections in stored order with source page;
+  table of contents (sticky on desktop, collapsible on mobile). Flag
+  presentation (`sectionPresentation`): Open Research Item → dashed violet
+  "Open research item · Unresolved" + "treat as an unanswered question";
+  Known Service Gap → orange; Client disclosure → amber with Required /
+  Recommended; State requirement → blue; N/A → muted.
+- **Panels beside the text (never inserted into it):** *Shared services
+  applicable to <State>* — nationally stated services that are inherited
+  ("Applies from a national source statement", each with its source
+  citation and optional quote) or disputed; services also printed in the
+  entry sit in a collapsed "Also printed in the <State> entry" list;
+  caveats (BOI delivery risk) shown. *Source discrepancies* — each
+  disputed service with the open question and every conflicting quote, badge
+  "Source discrepancy — not confirmed". *Not offered in <State> (per
+  source)* — collapsed; only explicit not-a-product / not-sold-here /
+  restricted-to-other-states statements with their citation. Unknown
+  services are not listed.
+- **Wording rules** (`availabilityPresentation`): only direct and inherited
+  assert availability; disputed = "Source discrepancy — not confirmed";
+  unknown = "No confirmed information in the current Knowledge Base" (never
+  "No").
+
 ### Domain model
 
 - **Account** — a company; ~46 Salesforce-style entity-formation fields.
@@ -861,6 +920,8 @@ account-contacts; leads incl. convert; reassignment
 conversations + messages; **automations** (10 routes, §3.1); the
 `/customers` compatibility shim (§6.1); and the read-only **Knowledge Base**
 (`GET /knowledge/articles`, `GET /knowledge/articles/:idOrSlug`, Phase 8).
+Web routes add `/knowledge` and `/knowledge/:slug` (Phase 8B); no API route
+was added for the UI.
 
 ---
 
@@ -1060,14 +1121,14 @@ against the ten keys; `null`/omitted = uncategorized.
 | Case automations | Management as in §3.1; **no execution** |
 | Mentions | `@Name` in comments, resolved server-side to active employees who may view the case; your own inbox only |
 | Messages | DMs, groups, case tagging (filtered by case access), soft delete by the author; member-only |
-| Knowledge Base | **API only** (Phase 8): five internal LLC pilot articles, list/filter/read; no UI yet |
+| Knowledge Base | Five internal LLC pilot articles: search/filter page and reader with flagged sections, shared-service provenance, source discrepancies (Phase 8B); read-only |
 | Insights | Case analytics off `/stats` and `/cases` (`insights.cases.view`); Sales and People domains planned |
 | Accounting | **Prototype data only** (visibility gated: statements vs Payroll) |
 | Settings | Mostly prototype UI (local state), sections gated by permission |
 
 ### Test coverage
 
-`pnpm test`: Vitest + Supertest, **53 files / 761 tests** in
+`pnpm test`: Vitest + Supertest, **54 files / 778 tests** in
 `artifacts/api-server/test/`. Covers authentication (passwords, sessions,
 expiry, revocation, throttling, spoofing, same-origin, the 401 on every
 route), the permission core (the approved matrix cell by cell, resolver,
@@ -1091,9 +1152,9 @@ Isolation is enforced: `test/setup.ts` chdirs into a temp directory before the
 store loads, so the suite cannot touch the live `store.json`
 (`test/isolation.test.ts` asserts it). Pool is `forks`.
 
-`pnpm test:e2e`: **Playwright, 54 tests in 4 files** (`e2e/tests/`:
+`pnpm test:e2e`: **Playwright, 67 tests in 5 files** (`e2e/tests/`:
 `rbac.spec.ts`, `dashboard.spec.ts`, `lifecycle.spec.ts`,
-`thread.spec.ts`). It starts its own API on 3101 with a fresh temp store
+`thread.spec.ts`, `knowledge.spec.ts`). It starts its own API on 3101 with a fresh temp store
 (`CASES_DATA_DIR`) and Vite on 5174; `E2E_BASE_URL` points it at servers you
 started yourself. `e2e/` is outside the pnpm workspace:
 `@playwright/test` 1.56.1 pinned in `e2e/package.json`, locked by
@@ -1129,9 +1190,9 @@ targeted Playwright suite.
   Knowledge Assistant (hybrid RAG over the Knowledge Base, with hand-off of an
   unanswered question to a supervisor by DM). Nothing references any LLM; no
   embeddings or vector store exist.
-- **Knowledge Base beyond the foundation** — the remaining 46 LLC
-  jurisdictions, Corporation articles, the article browser/reader UI, Case
-  recommendations, editing (`knowledge.manage`).
+- **Knowledge Base beyond 8B** — the remaining 46 LLC jurisdictions,
+  Corporation articles, Case recommendations (8C), the Knowledge Assistant,
+  editing (`knowledge.manage`).
 - **Billing / payments** — no Stripe, refunds, chargebacks, revenue,
   commissions or goals.
 - **Phone system** — calls are logged by hand; no durations, recordings or
@@ -1270,13 +1331,13 @@ approval, and ends with typecheck, the unit/API suite, the Playwright suite
 and CI all green, committed separately and not pushed automatically.
 Candidate next phases (none started):
 
-0. **Phase 8B — remaining LLC articles**: generate the other 46 states + D.C.
-   from the same PDF with the Phase 8 extraction rules (the shared rules in
-   `llcShared.ts` then apply to them unchanged), classify the 16
-   remaining highlighted boxes (the source also uses titles such as "Annual
-   Certificate and Agent Fee" and "…— Verify Before Relying"), extend the
-   fidelity fixture, then the Knowledge Base reader UI, Case
-   recommendations and the Knowledge Assistant as separate approved steps.
+0. **Knowledge Base next steps** (each separately approved): Phase 8C Case
+   recommendations (match Case entity type / state / category / tags to
+   effective metadata, showing direct vs inherited evidence); ingest the
+   other 46 states + D.C. from the same PDF with the Phase 8 extraction
+   rules (the shared rules in `llcShared.ts` then apply unchanged; classify
+   the 16 remaining highlighted boxes, e.g. "Annual Certificate and Agent
+   Fee", "…— Verify Before Relying"); then the Knowledge Assistant.
 1. **People management** — invite/deactivate employees, assign roles and
    teams, rename (refreshing `ownerName` labels), backed by `people.*` and
    `settings.teams.*` permissions and the real `store.teams`.

@@ -45,7 +45,13 @@ practice — leads, companies, the people behind them, and the matters in flight
   that state's entry, inherited from an explicit national statement in the
   source, not offered, restricted, disputed by the source, or unknown — a
   service a state entry doesn't mention is never treated as unavailable.
-  No Knowledge Base page, Case recommendations or AI assistant yet.
+  **Knowledge** in the sidebar (Phase 8B) opens a read-only search page
+  (`/knowledge`: search, entity type, state and topic filters, with each
+  result saying whether it matched the state's own text or a national
+  shared service) and an article reader (`/knowledge/:slug`: sections in
+  source order with a table of contents, flagged warnings, shared services,
+  source discrepancies, source and internal-use notice). No editing, Case
+  recommendations or AI assistant yet.
 - **Roles and permissions** — every employee sees and can do only what their
   role allows (own / team / company scope), enforced by the API and mirrored
   in the UI.
@@ -127,14 +133,14 @@ Partner roles are reserved and have no access yet.
 | `pnpm dev:api` | API only |
 | `pnpm dev:web` | Frontend only |
 | `pnpm typecheck` | TypeScript across the workspace — currently clean |
-| `pnpm test` | Test suite (Vitest + Supertest) — 761 tests in 53 files |
-| `pnpm test:e2e` | Playwright RBAC, dashboard and case-lifecycle browser suite (e2e/) — 54 tests |
+| `pnpm test` | Test suite (Vitest + Supertest) — 778 tests in 54 files |
+| `pnpm test:e2e` | Playwright RBAC, dashboard, case-lifecycle, Thread and Knowledge browser suite (e2e/) — 67 tests |
 | `pnpm build` | Production builds for everything |
 | `pnpm api:generate` | Orval regen — **don't**, the spec it reads is stale |
 
 The test suite covers the API plus a few pure frontend modules; the
-Playwright suite covers role-based navigation, dashboards, case lifecycle and
-the Case Thread in a real browser. GitHub Actions runs typecheck + tests on
+Playwright suite covers role-based navigation, dashboards, case lifecycle,
+the Case Thread and the Knowledge Base in a real browser. GitHub Actions runs typecheck + tests on
 Node 20 and 22 and the Playwright suite on every push and pull request to
 `main`. There is no lint step (`pnpm lint` is a no-op). Tests run against
 throwaway data and never touch `store.json`.

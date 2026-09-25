@@ -29,10 +29,11 @@ cases-app/
 
 Navigation (each employee sees only what their permissions allow):
 Dashboard, Leads, **Records** (Accounts | Clients | Cases), Insights,
-Messages, Accounting (prototype data), Settings. Automations live **inside
+Messages, Knowledge, Accounting (prototype data), Settings. Automations live **inside
 each case** (Case Detail → Automations); they are configured, **never
-executed**. The **Knowledge Base** (Phase 8) exists as a backend/API only —
-five internal LLC pilot articles; there is no Knowledge Base page yet.
+executed**. **Knowledge** (Phase 8B) is a read-only reference library over
+five internal LLC pilot articles: `/knowledge` (search/filters) and
+`/knowledge/:slug` (reader).
 
 ## Core rules (read before changing anything)
 
@@ -76,7 +77,11 @@ five internal LLC pilot articles; there is no Knowledge Base page yet.
    entry does not print is not "unavailable"**: national applicability comes
    only from explicit, cited shared rules (`content/llcShared.ts`), is
    exposed as *inherited* metadata — never as article text — and source
-   contradictions stay recorded as unresolved discrepancies.
+   contradictions stay recorded as unresolved discrepancies. **The UI never
+   erases uncertainty**: Open Research Items read as unresolved, disputed
+   never reads as available, unknown never reads as "no", inherited
+   services are shown beside the entry with their source — never inside it
+   (rules in `cases/src/lib/knowledge.ts`).
 10. **Every change ends green**: `pnpm typecheck`, `pnpm test`,
    `pnpm test:e2e`, and CI (Node 20, Node 22, Playwright). Commit each phase
    separately; never push without the owner's approval.
@@ -91,8 +96,8 @@ Run from `cases-app/`. Requires Node ≥20 and pnpm 9.0.0 (`corepack prepare pnp
 | `pnpm dev:api` | API only |
 | `pnpm dev:web` | Frontend only (proxies /api to :3001) |
 | `pnpm typecheck` | tsc --noEmit across the workspace (API src + tests, web, lib/db, lib/access) — **must stay clean** |
-| `pnpm test` | Vitest + Supertest suite (53 files, 761 tests) — **must stay green** |
-| `pnpm test:e2e` | Playwright RBAC, dashboard and case-lifecycle browser suite (e2e/, 54 tests; own API + Vite on 3101/5174, temp data) |
+| `pnpm test` | Vitest + Supertest suite (54 files, 778 tests) — **must stay green** |
+| `pnpm test:e2e` | Playwright RBAC, dashboard, case-lifecycle, Thread and Knowledge browser suite (e2e/, 67 tests; own API + Vite on 3101/5174, temp data) |
 | `pnpm build` | esbuild bundle for the API, `tsc -b && vite build` for the web |
 | `pnpm api:generate` | Orval regen from the OpenAPI spec — **do not run**; the spec is stale |
 
@@ -248,6 +253,12 @@ it, debounced, after every successful non-GET request.
   `effective*` for filtering; never add a shared rule without a source
   statement of scope, never resolve a discrepancy in code, and never let
   silence become "not offered". Details: CLAUDE_HANDOFF.md §2 "Knowledge Base".
+  **UI (8B):** `pages/Knowledge.tsx`, `pages/KnowledgeArticle.tsx`,
+  `components/knowledge/parts.tsx` and the pure `lib/knowledge.ts` (types,
+  mirrored topic/service labels — agreement tested — and the presentation
+  rules). Render sections from the API in stored order; never hard-code
+  sections or rewrite text; query keys `["knowledge","articles",params]`,
+  `["knowledge","article",slug]`. Read-only — no editing UI.
 - **`lib/access` is the single source of access rules** (Phase 2): role keys,
   the permission catalog, own/team/all scopes, role bundles, Account field
   groups with sensitive-read rules, Settings/Insights permissions, the
@@ -286,10 +297,10 @@ it, debounced, after every successful non-GET request.
   `["case-automations", caseId]`, `["automation", id]`,
   `["automation-usage", id]`, `["accounts"]`, `["account", id]`,
   `["contacts"]`, `["contact", id]`, `["clients"]`, `["customers"]`,
-  `["mentions"]`, `["stats"]`, `["team"]`. Mutations invalidate by key —
+  `["mentions"]`, `["stats"]`, `["team"]`, `["knowledge", …]`. Mutations invalidate by key —
   match the existing invalidation sets.
 - **Pure logic modules** (`lib/records.ts`, `lib/caseLinks.ts`,
-  `lib/caseSort.ts`, `lib/caseMeta.ts`, `lib/session.ts`) import nothing, so the API test suite can import and test
+  `lib/caseSort.ts`, `lib/caseMeta.ts`, `lib/session.ts`, `lib/knowledge.ts`) import nothing, so the API test suite can import and test
   them under Node. Keep new testable UI logic in that shape.
 - **Routing** is Wouter, not React Router. **Icons** are Lucide. **Charts** are
   Recharts. **Animation** is Framer Motion. **Styling** is Tailwind v4 (beta)
@@ -301,7 +312,7 @@ it, debounced, after every successful non-GET request.
 ## Tests
 
 `pnpm test` from the root, or `pnpm --filter @cases/api-server test`.
-Vitest + Supertest, in `artifacts/api-server/test/` — 53 files, 761 tests.
+Vitest + Supertest, in `artifacts/api-server/test/` — 54 files, 778 tests.
 
 - **Every request needs a session.** `test/helpers/app.ts` logs in through the
   real endpoint: `asMe` is Iris's session cookie, `loginAs(email)` returns
@@ -344,8 +355,8 @@ Vitest + Supertest, in `artifacts/api-server/test/` — 53 files, 761 tests.
 
 ### Browser suite (Playwright)
 
-`pnpm test:e2e` — `e2e/` (54 tests in `rbac`, `dashboard`, `lifecycle`,
-`thread` specs). It installs `@playwright/test` 1.56.1 from
+`pnpm test:e2e` — `e2e/` (67 tests in `rbac`, `dashboard`, `lifecycle`,
+`thread`, `knowledge` specs). It installs `@playwright/test` 1.56.1 from
 `e2e/package-lock.json` with `npm ci` (e2e/ is outside the pnpm workspace),
 starts its own API on 3101 with a fresh temp store (`CASES_DATA_DIR`) and
 Vite on 5174, so it never touches the live store; set `E2E_BASE_URL` to use
@@ -373,9 +384,9 @@ Do not, without being asked:
 - Wire up `lib/db`, run migrations, or introduce Postgres.
 - Add AI/LLM functionality, embeddings or a vector store, an Accounting
   backend, an **automation execution engine**, or a Settings backend.
-- Add Knowledge Base articles, Corporation content, a Knowledge Base UI or
-  Case recommendations outside an approved phase, or edit article text
-  away from its source.
+- Add Knowledge Base articles, Corporation content, article editing,
+  Case recommendations or a Knowledge Assistant outside an approved phase,
+  or edit article text away from its source.
 - Upgrade dependencies. Tailwind is on a v4 **beta** and esbuild is pinned to
   0.21.5 by a root override for a reason.
 

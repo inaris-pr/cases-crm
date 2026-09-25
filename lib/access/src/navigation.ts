@@ -27,7 +27,6 @@ export interface NavSection {
 export interface NavItem {
   id: "dashboard" | "leads" | "records" | "insights" | "messages" | "knowledge" | "accounting" | "settings";
   label: string;
-  /** Null for the external Knowledge Base link (its URL is configuration). */
   href: string | null;
   external?: boolean;
   /** For items without sections: visible when the user holds ANY of these. */
@@ -104,7 +103,8 @@ export const NAV_ITEMS: readonly NavItem[] = [
   { id: "records", label: "Records", href: "/records", sections: RECORDS_TAB_SECTIONS },
   { id: "insights", label: "Insights", href: "/insights", sections: INSIGHTS_SECTIONS },
   { id: "messages", label: "Messages", href: "/messages", requires: ["messages.use"] },
-  { id: "knowledge", label: "Knowledge Base", href: null, external: true, requires: ["knowledge.view"] },
+  // Phase 8B: the in-app Knowledge Base (it replaced the external-link placeholder).
+  { id: "knowledge", label: "Knowledge", href: "/knowledge", requires: ["knowledge.view"] },
   { id: "accounting", label: "Accounting", href: "/accounting", sections: ACCOUNTING_SECTIONS },
   { id: "settings", label: "Settings", href: "/settings", sections: SETTINGS_SECTIONS },
 ];
@@ -125,14 +125,10 @@ export interface VisibleNavItem extends NavItem {
 }
 
 /**
- * The sidebar for these permissions. The Knowledge Base item appears only
- * when its URL is configured (D12). Records links to the first tab the user
+ * The sidebar for these permissions. Records links to the first tab the user
  * may open.
  */
-export function visibleNavItems(
-  perms: EffectivePermissions,
-  opts: { knowledgeBaseUrl?: string | null } = {},
-): VisibleNavItem[] {
+export function visibleNavItems(perms: EffectivePermissions): VisibleNavItem[] {
   const out: VisibleNavItem[] = [];
   for (const item of NAV_ITEMS) {
     if (item.sections) {
@@ -143,11 +139,6 @@ export function visibleNavItems(
       continue;
     }
     if (!canAny(perms, item.requires ?? [])) continue;
-    if (item.id === "knowledge") {
-      if (!opts.knowledgeBaseUrl) continue;
-      out.push({ ...item, href: opts.knowledgeBaseUrl });
-      continue;
-    }
     out.push({ ...item });
   }
   return out;
@@ -198,6 +189,8 @@ export const ROUTE_ACCESS: readonly RouteAccess[] = [
   { path: "/accounting", requires: liveRequirements(ACCOUNTING_SECTIONS) },
   { path: "/settings", requires: liveRequirements(SETTINGS_SECTIONS) },
   { path: "/messages", requires: ["messages.use"] },
+  { path: "/knowledge", requires: ["knowledge.view"] },
+  { path: "/knowledge/:slug", requires: ["knowledge.view"] },
   { path: "/account", requires: [], signedIn: true },
 ];
 

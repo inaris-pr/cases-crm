@@ -44,16 +44,13 @@ const ICONS: Record<AccessNavItem["id"], typeof LayoutDashboard> = {
   settings: SettingsIcon,
 };
 
-/** The Knowledge Base link (D12): shown only when its URL is configured. */
-const KNOWLEDGE_BASE_URL: string | null = import.meta.env.VITE_KNOWLEDGE_BASE_URL || null;
-
 /**
  * The sidebar for these permissions (RBAC Phase 5): built only from
  * lib/access's visibleNavItems, so anything the employee cannot use is
  * absent. Records links to the first tab they may open.
  */
 function navFor(permissions: Parameters<typeof visibleNavItems>[0]): NavItem[] {
-  return visibleNavItems(permissions, { knowledgeBaseUrl: KNOWLEDGE_BASE_URL }).map((item) => ({
+  return visibleNavItems(permissions).map((item) => ({
     id: item.id,
     label: item.label,
     href: item.href ?? "/",

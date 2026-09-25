@@ -23,8 +23,7 @@ import {
 /** Navigation metadata (§R6). Defined in Phase 2, used by the web app in Phase 5. */
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const as = (...roles: RoleKey[]) => resolvePermissions(roles);
-const nav = (role: RoleKey, kb: string | null = "https://kb.example.com") =>
-  visibleNavItems(as(role), { knowledgeBaseUrl: kb }).map((i) => i.id);
+const nav = (role: RoleKey) => visibleNavItems(as(role)).map((i) => i.id);
 
 describe("sidebar per role", () => {
   const EXPECTED: [RoleKey, string[]][] = [
@@ -45,14 +44,22 @@ describe("sidebar per role", () => {
 
   it("reserved roles see nothing", () => {
     for (const role of RESERVED_ROLE_KEYS) expect(nav(role)).toEqual([]);
-    expect(visibleNavItems({}, { knowledgeBaseUrl: "https://kb" })).toEqual([]);
+    expect(visibleNavItems({})).toEqual([]);
   });
 
-  it("shows the Knowledge Base only when its URL is configured", () => {
-    expect(nav("csr", null)).not.toContain("knowledge");
-    const kb = visibleNavItems(as("csr"), { knowledgeBaseUrl: "https://kb.example.com" }).find((i) => i.id === "knowledge");
-    expect(kb?.href).toBe("https://kb.example.com");
-    expect(kb?.external).toBe(true);
+  it("Knowledge is the in-app Knowledge Base, for knowledge.view holders only (Phase 8B)", () => {
+    const kb = visibleNavItems(as("csr")).find((i) => i.id === "knowledge");
+    expect(kb).toMatchObject({ label: "Knowledge", href: "/knowledge" });
+    expect(kb?.external).toBeUndefined();
+    const withoutKb = { ...as("csr") };
+    delete withoutKb["knowledge.view"];
+    expect(visibleNavItems(withoutKb).map((i) => i.id)).not.toContain("knowledge");
+    for (const path of ["/knowledge", "/knowledge/california-llc-services-and-requirements", "/knowledge?q=banking"]) {
+      expect(canOpenRoute(as("csr"), path)).toBe(true);
+      expect(canOpenRoute(as("hr"), path)).toBe(true);
+      expect(canOpenRoute(withoutKb, path)).toBe(false);
+      for (const role of RESERVED_ROLE_KEYS) expect(canOpenRoute(as(role), path)).toBe(false);
+    }
   });
 
   it("points Records at the first tab the user may open", () => {

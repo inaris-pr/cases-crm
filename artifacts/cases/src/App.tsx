@@ -13,6 +13,8 @@ import { Accounting } from "./pages/Accounting";
 import { Insights } from "./pages/Insights";
 import { Settings } from "./pages/Settings";
 import { Messages } from "./pages/Messages";
+import { Knowledge } from "./pages/Knowledge";
+import { KnowledgeArticle } from "./pages/KnowledgeArticle";
 import { NotFound } from "./pages/NotFound";
 import { LoginPage } from "./pages/Login";
 import { NoAccess, NoRoleAccess } from "./pages/NoAccess";
@@ -90,6 +92,9 @@ function GuardedRoutes() {
         <Route path="/insights" component={Insights} />
         <Route path="/settings" component={Settings} />
         <Route path="/messages" component={Messages} />
+        {/* Knowledge Base (Phase 8B): read-only reference articles. */}
+        <Route path="/knowledge" component={Knowledge} />
+        <Route path="/knowledge/:slug" component={KnowledgeArticle} />
         <Route path="/account" component={AccountSettings} />
         <Route component={NotFound} />
       </Switch>

@@ -8,16 +8,16 @@ import { EMAIL, login, logout, sidebar, testIds } from "./helpers";
  * The API enforces the same rules (covered by the API test suite).
  */
 
-// The Knowledge Base link is hidden unless VITE_KNOWLEDGE_BASE_URL is set.
+// Knowledge (Phase 8B) is an in-app page for every role holding knowledge.view.
 const SIDEBAR: [keyof typeof EMAIL, string[]][] = [
-  ["csr", ["dashboard", "records", "messages"]],
-  ["csrSupervisor", ["dashboard", "records", "insights", "messages", "settings"]],
-  ["businessAdvisor", ["dashboard", "leads", "records", "messages"]],
-  ["baSupervisor", ["dashboard", "leads", "records", "messages", "settings"]],
-  ["admin", ["dashboard", "records", "messages"]],
-  ["adminSupervisor", ["dashboard", "records", "insights", "messages", "settings"]],
-  ["hr", ["dashboard", "messages", "accounting", "settings"]],
-  ["systemOwner", ["dashboard", "leads", "records", "insights", "messages", "accounting", "settings"]],
+  ["csr", ["dashboard", "records", "messages", "knowledge"]],
+  ["csrSupervisor", ["dashboard", "records", "insights", "messages", "knowledge", "settings"]],
+  ["businessAdvisor", ["dashboard", "leads", "records", "messages", "knowledge"]],
+  ["baSupervisor", ["dashboard", "leads", "records", "messages", "knowledge", "settings"]],
+  ["admin", ["dashboard", "records", "messages", "knowledge"]],
+  ["adminSupervisor", ["dashboard", "records", "insights", "messages", "knowledge", "settings"]],
+  ["hr", ["dashboard", "messages", "knowledge", "accounting", "settings"]],
+  ["systemOwner", ["dashboard", "leads", "records", "insights", "messages", "knowledge", "accounting", "settings"]],
 ];
 
 test.describe("sidebar by role", () => {
@@ -160,7 +160,7 @@ test.describe("switching employees", () => {
     expect(seen).toContain("nav-dashboard"); // the observer did see the new sidebar
     expect(seen).not.toContain("nav-leads");
     expect(seen).not.toContain("nav-accounting");
-    expect(await sidebar(page)).toEqual(["dashboard", "records", "messages"]);
+    expect(await sidebar(page)).toEqual(["dashboard", "records", "messages", "knowledge"]);
   });
 
   test("every successful login lands on the Dashboard, whatever was open before", async ({ page }) => {
@@ -189,7 +189,7 @@ test.describe("switching employees", () => {
 test.describe("System Owner", () => {
   test("sees every authorized live section and can open each", async ({ page }) => {
     await login(page, EMAIL.systemOwner);
-    for (const id of ["leads", "records", "insights", "messages", "accounting", "settings"]) {
+    for (const id of ["leads", "records", "insights", "messages", "knowledge", "accounting", "settings"]) {
       await page.getByTestId(`nav-${id}`).click();
       await expect(page.getByTestId("no-access")).toHaveCount(0);
     }
