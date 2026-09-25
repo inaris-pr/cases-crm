@@ -35,7 +35,11 @@ practice — leads, companies, the people behind them, and the matters in flight
   revert. *Management only — automations are not executed yet.*
 - **Messages** — team DMs and groups with case tagging and `@mention` alerts.
 - **Insights** — charts over cases and assignees.
-- **Accounting** and **Settings** are front-end prototypes with no backend.
+- **Roles and permissions** — every employee sees and can do only what their
+  role allows (own / team / company scope), enforced by the API and mirrored
+  in the UI.
+- **Accounting** and **Settings** are front-end prototypes with no backend
+  (their visibility follows permissions).
 
 ## Stack
 
@@ -52,16 +56,18 @@ cases-app/
 ├─ artifacts/
 │  ├─ cases/         React + Vite frontend
 │  └─ api-server/    Express backend + JSON-backed store (+ test/)
-└─ lib/
-   ├─ access/            Roles, permissions, Account field rules, navigation metadata
-   ├─ db/                Drizzle/Postgres schema — stale, not wired up
-   ├─ api-spec/          OpenAPI 3.1 — stale, covers ~25% of the API
-   └─ api-client-react/  Orval target — never generated
+├─ lib/
+│  ├─ access/            Roles, permissions, Account field rules, navigation, controls, dashboard rules
+│  ├─ db/                Drizzle/Postgres schema — stale, not wired up
+│  ├─ api-spec/          OpenAPI 3.1 — stale, pre-Account model
+│  └─ api-client-react/  Orval target — never generated
+└─ e2e/                  Playwright browser suite (npm, outside the workspace)
 ```
 
-`lib/access` is the shared role-based access core (used by the API; the web app
-imports its types). The other three `lib/` packages predate the current data
-model and are **not** in the running path. See CLAUDE_HANDOFF.md §6.4 before touching them.
+`lib/access` is the shared role-based access core, used by both the API and
+the web app. The other three `lib/` packages predate the current data model
+and are **not** in the running path. See CLAUDE_HANDOFF.md §6.5 before
+touching them.
 
 ## First run
 
@@ -95,8 +101,9 @@ Sign in with any of these accounts — password `test123` for all:
 | `rachel@example.com` | Admin Supervisor | demo |
 | `tessa@example.com` | HR | demo |
 
-Roles are recorded but do not yet change what anyone can see or do — that
-arrives with the role-based access phases.
+Each role sees a different Dashboard, sidebar and set of actions (e.g.
+Business Advisors have no Cases; HR sees no customer data). Filing and
+Partner roles are reserved and have no access yet.
 
 > Coming from another machine? `node_modules` is platform-specific. Delete it
 > and reinstall rather than copying it across.
@@ -114,9 +121,11 @@ arrives with the role-based access phases.
 | `pnpm build` | Production builds for everything |
 | `pnpm api:generate` | Orval regen — **don't**, the spec it reads is stale |
 
-The test suite covers the API plus a few pure frontend modules (Records
-routing, record links, table sorting). React components are not tested, there
-is no CI, and there is no lint step (`pnpm lint` is a no-op). Tests run against
+The test suite covers the API plus a few pure frontend modules; the
+Playwright suite covers role-based navigation, dashboards, case lifecycle and
+the Case Thread in a real browser. GitHub Actions runs typecheck + tests on
+Node 20 and 22 and the Playwright suite on every push and pull request to
+`main`. There is no lint step (`pnpm lint` is a no-op). Tests run against
 throwaway data and never touch `store.json`.
 
 ## Data
@@ -135,8 +144,8 @@ The API keeps everything in memory and persists the whole store to
   changed.
 
 Seeded content: 17 companies, 21 contacts, 8 leads, 15 cases across every
-status and priority, 65 tasks, 12 documents, 15 logged interactions and one
-global automation. Messaging starts empty — conversations are created from the
+status and priority, 65 tasks, 12 documents, 15 logged interactions, one
+global automation, and 9 employees in 3 teams. Messaging starts empty — conversations are created from the
 UI. Everything is fictional.
 
 ## Switching to Postgres
@@ -154,9 +163,8 @@ configuration change. Rewrite the schema first.
   `/cases`, `/records`) redirect to the matching Records tab; `/workflow`
   redirects to Records → Cases. Detail URLs (`/accounts/:id`,
   `/clients/:id`, `/cases/:id`) are unchanged.
-- Messages live in the floating widget that `AppLayout` renders on every page.
-  The `/messages` route is a roomier full-page version, intentionally absent
-  from the sidebar.
+- Messages live in the floating widget that `AppLayout` renders on every page
+  and in the full-page `/messages` view (the sidebar's Messages entry).
 - The API base URL is `import.meta.env.BASE_URL + /api/...`, so the app works
   behind a sub-path proxy.
 - Vite binds `127.0.0.1` and reads `VITE_PORT`/`PORT`. Set `VITE_HOST=0.0.0.0`
@@ -168,7 +176,9 @@ configuration change. Rewrite the schema first.
   failed logins are throttled, and cross-origin writes are refused. This is a
   sound local prototype, not production security — see CLAUDE_HANDOFF.md §6.6.
 - On first start after upgrading, an older `store.json` is migrated in place
-  after a verified backup to `artifacts/api-server/data/backups/`.
+  after a verified backup to `artifacts/api-server/data/backups/` (schema v2
+  is current). **Stop `pnpm dev` before introducing a new migration** — the
+  dev server restarts on file changes and would run it immediately.
 - Roles and permissions are defined in `lib/access`, enforced by the API and
   reflected by the web app: each employee sees only the sidebar entries,
   tabs, sections and buttons their role allows, and a forbidden URL shows a

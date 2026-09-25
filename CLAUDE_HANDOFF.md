@@ -4,16 +4,76 @@
 re-discovering the repository. If you change the architecture, update this
 file in the same change.
 
-**Last synchronized with the code:** 2026-09-23, at commit `2e07101`
-(documentation-only update on top of it), then updated for **RBAC Phase 1 —
-identity foundation** (and its browser-login fix) and **RBAC Phase 2 —
-permission core**, **RBAC Phase 3 — backend enforcement** and **RBAC Phase 4 —
-stable ownership ids and real team scope** and **RBAC Phase 5 — role-aware
-frontend** and **RBAC Phase 6 — personalized role dashboards** and **Phase 7 —
-case lifecycle, categories & escalations** (with the unified Case Thread
-follow-up). Typecheck clean; **644 tests across 48 files**, all passing;
-Playwright 54 tests. Default branch `main`, pushed to the private
-remote `inaris-pr/cases-crm`.
+**Checkpoint — 2026-09-25.** Synchronized with the code at `280fa35`
+("Phase 7 Thread follow-up: newest activity first"), which is also
+`origin/main` (local `main` level with the remote before this documentation
+commit). Default branch `main`; private remote `inaris-pr/cases-crm`.
+
+| Gate | Baseline |
+|---|---|
+| `pnpm typecheck` | clean (api-server src + tests, web, lib/access, lib/db) |
+| `pnpm test` | **644 tests in 48 files**, all passing (Vitest + Supertest) |
+| `pnpm test:e2e` | **54 Playwright tests in 4 spec files**, all passing |
+| GitHub Actions | green: Node 20 and Node 22 typecheck + test, Playwright browser suite |
+
+**Status:** RBAC Phases 1–6 and Phase 7 (case lifecycle, categories,
+escalations) are complete, including the Phase 7 follow-ups (Category on the
+Board's New Case popup; the Case Thread as a unified, immutable,
+newest-first operational timeline). **No Phase 8 has started.** Automations
+can be configured but are **never executed**.
+
+---
+
+## 0. Start here
+
+**CASES.** is an internal case/customer operations CRM for a U.S. entity
+formation business (LLC filings, registered agents, EIN, compliance). It
+covers:
+
+- sign-in with server sessions, and role-based access control (RBAC)
+- **Records**: Accounts (companies), Clients (people), Cases
+- **Leads** with conversion into Account + Client (+ optional first Case)
+- **Cases**: status, priority, category, owner, escalations, tasks,
+  documents, call/contact logs, comments, automations (configuration only)
+  and a unified **Thread** timeline
+- **Messages** (DMs/groups, case tags, @mentions)
+- permission-composed **Dashboards** per role
+- **Insights** (case analytics), **Accounting** (prototype data only),
+  **Settings** (mostly prototype; access-gated)
+
+**Where the rules live (sources of truth):**
+
+| Concern | Module |
+|---|---|
+| Roles, permissions, scopes, role bundles, Account field groups, navigation/route access, per-record controls, dashboard section/widget rules | `lib/access/src/*` (`@cases/access`) — shared by API and web |
+| Route guards, principal, own/team/all scope checks | `artifacts/api-server/src/auth/authorize.ts` |
+| Sessions, passwords, login throttling, same-origin check | `artifacts/api-server/src/auth/*`, `src/config.ts` |
+| Every API route | `artifacts/api-server/src/routes.ts` |
+| Data model, seed, load/normalize/persist | `artifacts/api-server/src/store.ts` |
+| Versioned store migrations (v1 identity, v2 ownership ids) | `artifacts/api-server/src/migrations.ts` |
+| Dashboards | `src/dashboard.ts` + `lib/access/src/dashboard.ts` |
+| Case categories, escalation reasons, terminal status | `src/caseMeta.ts` (web mirror `cases/src/lib/caseMeta.ts`) |
+| Case status history, closedAt, resolution, escalations | `src/caseLifecycle.ts` |
+| Derived "last activity" | `src/caseActivity.ts` |
+| Case Thread feed | `src/caseFeed.ts` (web: `components/cases/CaseFeed.tsx`) |
+| Web routing / Records tabs / session landing | `cases/src/App.tsx`, `lib/records.ts`, `lib/session.ts` |
+| Web API types (duplicated by design) | `cases/src/lib/api.ts` |
+
+> ⚠️ **BEFORE ANY FUTURE STORE MIGRATION: stop `pnpm dev` first.**
+> `pnpm dev` runs the API with `tsx watch`, which restarts the server on
+> every saved source file, and startup migrates `store.json` if it is behind
+> `CURRENT_SCHEMA_VERSION`. In RBAC Phase 4 the running dev server
+> hot-reloaded the new v2 migration code and migrated the live store before
+> the migration had been reviewed, dry-run or committed (the backup was
+> verified and the result was correct, but the timing was not under
+> anyone's control). So: stop `pnpm dev`, write and test the migration
+> against isolated temp stores, get approval, then run it deliberately.
+> Prefer additive, nullable fields that `normalizeLoaded()` can fill in
+> memory — Phase 7 needed no migration at all.
+
+> **Automations do not execute.** The builder saves graphs; the Run button
+> only animates edges. Nothing evaluates triggers or performs actions, and
+> no "Automation ran" Thread entry is ever produced.
 
 ---
 
@@ -30,7 +90,7 @@ Work had stopped **mid-migration** from a flat `Customer` record to
 `Account` + `Contact` + `AccountContactLink` + `Lead`. The new model is live;
 the old one is still present as a compatibility layer (§6.1).
 
-Since recovery (all 2026-09-22/23, see CHANGELOG.md):
+Since recovery (2026-09-22 → 2026-09-25, see CHANGELOG.md):
 
 | Commits | Work |
 |---|---|
@@ -55,8 +115,9 @@ Since recovery (all 2026-09-22/23, see CHANGELOG.md):
 
 ## 2. Architecture
 
-pnpm workspace, TypeScript throughout, ~17k lines of source
-(frontend ~14k, API ~3.3k).
+pnpm workspace (`artifacts/*`, `lib/*`), TypeScript throughout, ~25k lines
+of source (web ~16.7k, API ~7.2k, lib/access ~1.2k) plus ~9.2k lines of
+API tests. pnpm 9.0.0, Node ≥ 20.
 
 ```
 cases-app/
@@ -64,18 +125,29 @@ cases-app/
 │  ├─ cases/         React 19, Vite 5, Tailwind v4-beta, Framer Motion,
 │  │                 Wouter, TanStack Query v5, Recharts, Lucide
 │  └─ api-server/    Node 20+, Express 5, Zod, Pino; tsx in dev, esbuild to build
-└─ lib/
-   ├─ access/           Role-based access core     (Phase 2; pure TS, no deps)
-   ├─ db/               Drizzle + postgres-js      (stale, unused)
-   ├─ api-spec/         OpenAPI 3.1 YAML           (stale)
-   └─ api-client-react/ Orval target               (never generated)
+├─ lib/
+│  ├─ access/           @cases/access: roles, permissions, scopes, navigation,
+│  │                    controls, dashboard rules (pure TS, no deps; used by
+│  │                    the API via src/access.ts and by the web via a Vite
+│  │                    alias + tsconfig path)
+│  ├─ db/               Drizzle + postgres-js      (stale, unused)
+│  ├─ api-spec/         OpenAPI 3.1 YAML           (stale)
+│  └─ api-client-react/ Orval target               (never generated)
+├─ e2e/                 Playwright suite (outside the pnpm workspace;
+│                       npm + e2e/package-lock.json)
+└─ .github/workflows/ci.yml   CI: typecheck + test (Node 20, 22) and e2e
 ```
+
+Web routing is **Wouter** (`App.tsx`); data is **TanStack Query** over the
+hand-written client in `cases/src/lib/api.ts`. The API is one Express router
+(`buildApiRouter()` in `routes.ts`) mounted at `/api`.
 
 ### Persistence
 
-There is **no database**. `api-server/src/store.ts` holds **sixteen**
-in-memory arrays (including `teams` and `sessions`), a `meta.schemaVersion`
-and an id-sequence object. A router-level hook persists the
+There is **no database**. `api-server/src/store.ts` holds **nineteen**
+in-memory arrays (including `teams`, `sessions` and the Phase 7
+`caseStatusEvents`, `caseEscalations`, `caseActivities`), a
+`meta.schemaVersion` (**2**) and an id-sequence object. A router-level hook persists the
 whole store to `artifacts/api-server/data/store.json` (debounced 100 ms)
 after every successful non-GET request.
 
@@ -87,7 +159,12 @@ collection missing from the file (e.g. `automations` in a pre-automation
 store) becomes `[]`, and any missing, non-numeric or too-low `seq` counter is
 repaired from the highest id present (and `caseNumber` from the highest
 `CASE-nnn`). It never drops or rewrites existing records. Adding a collection
-means adding one line to `COLLECTION_SEQ`.
+means adding one line to `COLLECTION_SEQ`. It also fills Phase 7 / Thread
+fields that older files lack, **in memory only** (the file changes on the
+next ordinary save): Case `category`/`closedAt`/`closedBy*` → `null`; Task
+`createdBy*`/`completed*` → `null` and `createdTitle` → the title as first
+loaded; Document `uploadedBy*` → `null`. Nothing historical is inferred
+(no `closedAt` from `updatedAt`, no invented actors).
 
 **Versioned migrations** (`src/migrations.ts`, from RBAC Phase 1): the store
 records `meta.schemaVersion` (currently 2). When `store.json` is behind,
@@ -103,7 +180,11 @@ being replaced by the seed. Step v1 (identity foundation) hashes passwords,
 maps legacy roles, adds user flags, and adds the demo employees and teams.
 Step v2 (ownership ids, Phase 4) adds the id next to every employee display
 name listed in `OWNERSHIP_FIELDS` by exact name match, and refuses the
-whole migration if any name matches no employee or more than one.
+whole migration if any name matches no employee or more than one. Phase 7
+and its follow-ups added only optional fields and collections, so the
+schema is still **v2** — see the migration warning in §0. The live store
+`artifacts/api-server/data/store.json` (and `data/backups/`) is
+**git-ignored**; `store.snapshot.json` is committed.
 
 Seed contents (verified by running `seed()`): 17 accounts, 21 contacts,
 23 account–contact links, 8 leads, 15 cases, 65 tasks, 12 documents,
@@ -128,8 +209,9 @@ automations (normalizeLoaded adds the empty collection; the seed does not run).
   (`business_advisor_supervisor`), Omar (`operations_admin`), Rachel
   (`operations_admin_supervisor`), Tessa (`hr`). All use `test123`.
 - **Teams** (`Team`): Customer Service (Devon, Sara; supervisor Nadia),
-  Business Advisors (Leo; Grace), Operations (Omar; Rachel). Stored only —
-  team scope arrives in Phase 4.
+  Business Advisors (Leo; Grace), Operations (Omar; Rachel). Team scope
+  reads them live on every request (§ Enforcement). Employees can hold
+  several roles; permissions are their union (widest scope wins).
 - **Passwords**: scrypt via Node's `crypto` (unique 16-byte salt, constant-time
   comparison; `src/auth/password.ts`). Never returned by any endpoint.
 - **Sessions** (`src/auth/sessions.ts`): random 256-bit token in an
@@ -137,7 +219,7 @@ automations (normalizeLoaded adds the empty collection; the seed does not run).
   HTTPS); only its SHA-256 is stored. Ends after 8 h idle or 7 days, on
   logout, or when the employee is deactivated.
 - **Endpoints**: `POST /api/auth/login`, `POST /api/auth/logout`,
-  `GET /api/auth/me` (`{ user, teams, permissions }`).
+  `GET /api/auth/me` (`{ user, teams, permissions, supervisedUserIds }`).
 - **Every other `/api` route requires a session** (`401 unauthenticated`).
   Identity comes only from the session; `X-User` and body names
   (`authorName`, `byName`, `senderName`) are ignored.
@@ -153,7 +235,10 @@ automations (normalizeLoaded adds the empty collection; the seed does not run).
 - **Frontend**: `AuthProvider` asks `/api/auth/me`; nothing identity-related
   is kept in `localStorage`; any `401` returns to the login screen; logout
   ends the server session and clears cached data.
-- Roles are enforced by the API from Phase 3 (below).
+- Roles are enforced by the API (Phase 3) and reflected by the web app
+  (Phase 5). **Permissions and scopes are authoritative, never role names**:
+  code asks `can(permissions, "cases.edit")` / `canOn(p, perm, ownerUserId)`,
+  not "is this a CSR".
 
 ### Permissions (RBAC Phase 2)
 
@@ -183,11 +268,30 @@ dependencies, and is the only place access rules live:
   sections (`live` vs `planned`; planned never shows an item), and
   `ROUTE_ACCESS` for every route in `App.tsx`.
 
+- `controls.ts` — per-record UI controls from the same rules
+  (`caseControls` incl. `escalate`/`resolveEscalation`, `leadControls`,
+  `accountControls`, `clientControls`, `createActions`).
+- `dashboard.ts` — `DASHBOARD_SECTION_REQUIREMENTS` and `DASHBOARD_WIDGETS`.
+
 The API re-exports it from `src/access.ts` (relative import, bundled by
-esbuild); `/api/auth/me` adds `permissions`. The web app imports only its
-types (`@cases/access` tsconfig path) and keeps `permissions` in
-`AuthProvider`, unused until Phase 5. **Nothing is enforced yet**:
-Phase 3 (below) enforces them.
+esbuild); `/api/auth/me` adds `permissions`. The web app imports it at
+runtime through a Vite alias (`@cases/access`, plus a tsconfig path) and
+keeps `permissions` in `AuthProvider`. `test/access-matrix.test.ts` pins the
+approved role × permission matrix cell by cell.
+
+Active roles and their essentials (full matrix in `grants.ts`):
+
+| Role | Essentials |
+|---|---|
+| `csr` | cases view/work all, edit own; accounts/clients view all; own case/call metrics |
+| `csr_supervisor` | as CSR, plus cases edit/assign **team**, team metrics, Insights (cases, team), Divisions & teams |
+| `business_advisor` | leads view/edit/convert own; accounts/clients view all; own sales metrics; **no cases** |
+| `business_advisor_supervisor` | leads **team**, accounts assign team, team sales metrics; **no cases** |
+| `operations_admin` | cases view/work all, edit own; account formation/regulatory fields; own metrics; **no leads** |
+| `operations_admin_supervisor` | cases edit **all**, assign team, global automations, all case/call metrics, pipeline settings; **no leads** |
+| `hr` | people view/manage, employee metrics & Insights (planned page), Payroll, Divisions view; **no customer, case or lead data** |
+| `system_owner` | every permission at `all` |
+| `filing`, `filing_supervisor`, `partner` | **reserved — zero permissions** ("No access has been set up for your role yet") |
 
 ### Enforcement (RBAC Phase 3)
 
@@ -245,6 +349,31 @@ In `routes.ts`:
   Account/Automation `createdByName`/`lastModifiedByName` stay name-only
   audit stamps.
 
+### Ownership, teams and reassignment (RBAC Phase 4)
+
+- Every owned record carries **`ownerUserId`** (cases, leads, accounts,
+  contacts, automations) next to an `ownerName` display label. Authors and
+  actors are ids too: `authorUserId`, `byUserId`, `senderUserId`,
+  `fromUserId`/`toUserId`, `memberUserIds`, and the Phase 7 `*ByUserId`
+  fields. **Permission logic never reads a display name.** Labels are kept
+  as written at the time (history is never rewritten); `ownerName` follows
+  the owner on reassignment.
+- **Team scope** = the caller's own records + records owned by members of
+  the teams the caller **currently supervises**, read from `store.teams` on
+  every request (`supervisedMemberIds`). Being a member gives nothing over
+  teammates; department or role alone gives nothing. A record with no owner
+  id is reachable only with `all` scope.
+- **Reassignment** only through `PUT /api/{type}/:id/owner { ownerUserId }`
+  (needs `<type>.assign`; current owner and target inside the caller's
+  assign scope; target must exist, be **active** and hold `<type>.view`).
+  `GET /api/owners/{type}/candidates` lists valid targets (active employees
+  only). The web uses `ReassignControl`.
+- **Deactivated employees** (`active: false`): their sessions end at once,
+  they cannot sign in, they are not offered as reassignment targets or
+  @-mention recipients, but records they own stay theirs and stay inside
+  their supervisor's team scope so they can be reassigned. There is no UI yet
+  to deactivate or rename employees (no People module).
+
 ### Frontend access (RBAC Phase 5)
 
 The web app renders only what the employee's permissions allow, from the
@@ -273,6 +402,25 @@ same lib/access rules the API enforces (`@cases/access`, a Vite alias):
   (active, can view that record type, inside the caller's assign scope)
   and sends `{ ownerUserId }`.
 - **Dashboard**: replaced by the Phase 6 dashboards (below).
+- **What each role sees** (pinned by `e2e/tests/rbac.spec.ts`):
+
+  | Role | Sidebar | Records tabs |
+  |---|---|---|
+  | CSR, Operations Admin | Dashboard, Records, Messages | Accounts, Clients, Cases |
+  | CSR Supervisor, Ops Admin Supervisor | Dashboard, Records, Insights, Messages, Settings | Accounts, Clients, Cases |
+  | Business Advisor | Dashboard, Leads, Records, Messages | Accounts, Clients (never Cases) |
+  | BA Supervisor | Dashboard, Leads, Records, Messages, Settings | Accounts, Clients |
+  | HR | Dashboard, Messages, Accounting (Payroll only), Settings (Divisions) | none |
+  | System Owner | everything | all three |
+  | reserved roles | none — a No-access screen | — |
+
+  Knowledge Base appears only when `VITE_KNOWLEDGE_BASE_URL` is set. Leads:
+  Business Advisors, BA Supervisors, System Owner only. Settings: Danger zone
+  and company settings are System Owner only; Invite users stays hidden
+  until a People phase. Typing a forbidden URL (e.g. a CSR at `/leads`, HR at
+  `/cases/1`) shows **No access** before the page mounts, so nothing is
+  fetched. Sign-in always lands on the Dashboard and clears cached data, so
+  a previous employee's navigation never shows.
 - **Browser tests**: `e2e/` (Playwright, 54 tests, `pnpm test:e2e`) starts its
   own API (fresh temp store via `CASES_DATA_DIR`) and Vite on 3101/5174;
   CI job `e2e`. e2e/ is outside the pnpm workspace; `@playwright/test` is
@@ -305,9 +453,13 @@ role name — so an employee with several roles sees the union.
 - **Last activity** (`src/caseActivity.ts`): the latest of the Case's
   `createdAt`/`updatedAt`, its call/contact logs, comments, task creations
   and document uploads, with its source. Derived on read — never stored,
-  `Case.updatedAt` untouched, existing sorts unchanged. Limitation: task
-  status changes and edits carry no timestamp, so they don't count; and
-  `Case.updatedAt` also moves on reassignment. No "stale" threshold — the
+  `Case.updatedAt` untouched, existing sorts unchanged. Task completions
+  (recorded since the Thread follow-up) and escalations are not part of this
+  rule; `Case.updatedAt` also moves on reassignment and status changes.
+- **Phase 7 additions**: escalated count, the Escalations widget (team/all
+  also see recent escalation activity), open Cases by category at team/all
+  scope, an Escalated column in workload, and escalations first in "Needs
+  attention" (§2 Case lifecycle). Business Advisors and HR get none. No "stale" threshold — the
   actual age is shown.
 - **Web**: `pages/Dashboard.tsx` renders `WIDGETS`
   (`components/dashboard/widgets.tsx`, presentational parts in `parts.tsx`)
@@ -331,9 +483,12 @@ role name — so an employee with several roles sees the union.
   commissions, goals/quotas, refunds, chargebacks, disputes, payments —
   need a billing/accounting backend; lead conversions over time and by
   advisor — need a conversion event recording who converted and when that
-  survives lead deletion; resolution time / time to close — needs
-  `closedAt` or a status history; task completion rates and task
-  assignment — need task `assigneeUserId`, `updatedAt`, `completedAt`;
+  survives lead deletion; aggregate resolution time / time to close —
+  Phase 7 now records `closedAt` and status history for Cases closed from
+  then on (Case Detail shows per-Case resolution), but no dashboard metric
+  aggregates it yet; task assignment and workload by assignee — need a task
+  `assigneeUserId` (tasks now record creator and current completion, but
+  have no assignee);
   call volume, talk time, missed calls — need a phone-system integration
   (today's figures are manual logs only); first response time — needs
   inbound-message timestamps per case; filing errors — need an error
@@ -358,7 +513,12 @@ from another and nothing is classified or escalated automatically.
   Tags stay free-form. Existing Cases are never auto-categorized. The web
   app mirrors the list in `cases/src/lib/caseMeta.ts`
   (`test/case-meta.test.ts` keeps them identical).
-- **Priority**: unchanged (`low|medium|high|critical`).
+- **Priority**: how urgent the work is — unchanged (`low|medium|high|critical`).
+- **Status**: where the work is — `intake` (picker: Open), `in_progress`
+  (Working), `review` (Pending Customer), `waiting` (Waiting on 3rd Party),
+  `completed` (Closed).
+- **Escalation**: an explicit, recorded hand-raise with a reason (below) —
+  never implied by priority, category or age.
 - **Terminal status**: only the existing `completed` (shown as "Closed").
 - **Status history** (`store.caseStatusEvents`, append-only): every status
   change from Phase 7 on records `fromStatus`, `toStatus`, `kind`
@@ -407,9 +567,10 @@ from another and nothing is classified or escalated automatically.
   fields are filled with `null` and missing collections with `[]` in memory
   on load (`normalizeLoaded`); the file is only written by the next ordinary
   save. Store stays at schema v2.
-- **Deferred**: automatic escalation, SLA deadlines/timers, business-hours
-  calendars, state-specific filing timelines, external alerts, chargebacks,
-  AI categorization.
+- **Deferred — there is NO SLA engine and NO automatic escalation yet**:
+  no SLA deadlines/timers, business-hours calendars, state-specific filing
+  timelines, external alerts, chargebacks or AI categorization. Escalation is
+  manual only.
 
 ### Case Thread — unified operational timeline (Phase 7 follow-up)
 
@@ -437,6 +598,12 @@ comments only; posting comments (and @-mentions) is unchanged.
 | `contact_logged` | `caseInteractions` with other channels (email, SMS, meeting, other) — one compact entry each |
 | `document_removed`, `automation_execution` | reserved types, never produced: no document removal exists, and no automation engine exists (the Run button only animates) |
 
+- **Comments vs system activity**: the composer only ever posts human
+  comments (`POST /cases/:id/thread`), which alone parse @-mentions and
+  notify. System entries are rendered compact and secondary, never parse
+  mentions, never notify, and cannot be edited or deleted. There are no fake
+  "comments" written by the system. **No "Automation ran" entry is produced
+  today** — automations do not execute.
 - **Actors**: always the session's employee (id + name label as of the
   event); body-supplied names/ids are ignored. Historical labels are never
   rewritten.
@@ -478,8 +645,12 @@ comments only; posting comments (and @-mentions) is unchanged.
   `intake|review|in_progress|waiting|completed`; priority
   `low|medium|high|critical`; tags; owner; `createdAt`, `updatedAt`;
   Phase 7: `category`, `closedAt`/`closedByUserId`/`closedByName`.
-- Around a case (Phase 7): **CaseStatusEvent** (status history) and
-  **CaseEscalation** (§2 Case lifecycle).
+- Around a case (Phase 7): **CaseStatusEvent** (status history),
+  **CaseEscalation** (§2 Case lifecycle) and **CaseActivity** (recorded
+  changes for the Thread: category, priority, owner, account, primary
+  client, task completed/reopened; §2 Case Thread). **Task** also records
+  `createdBy*`, `createdTitle` and the current `completed*`; **Doc** records
+  `uploadedBy*`.
 - Around a case: **Task**, **Doc**, **CaseInteraction**, **CaseThreadEntry**,
   **Mention**.
 - **Automation** — a saved visual workflow graph, scoped `case` or `global`
@@ -492,9 +663,17 @@ Robert Chen). Never use one where the other belongs — see §3.4.
 
 ### API
 
-**53 routes** under `/api`: auth (login, logout, me); cases (list/filters, create, detail,
-update); accounts; contacts; account-contacts; leads incl. convert; tasks;
-documents; `cases/:id/contacts`; `cases/:id/thread`; mentions; team; stats;
+**65 routes** under `/api` (the reviewed table in
+`test/route-guards.test.ts` must list every one): auth (login, logout, me);
+cases (list with status/priority/search/assignee/account/contact/**category**/
+**escalated** filters, create, detail with `statusHistory`/`escalations`/
+`resolution`, update); `POST /cases/:id/escalations` and
+`…/escalations/:escalationId/resolve`; `GET /cases/:id/feed` (unified Thread)
+and `GET|POST /cases/:id/thread` (comments); `GET|POST /cases/:id/contacts`
+(call/contact logs); tasks; documents (create only); accounts; contacts;
+account-contacts; leads incl. convert; reassignment
+`PUT /{cases|leads|accounts|contacts}/:id/owner` and
+`GET /owners/{type}/candidates`; mentions; team; `GET /dashboard`; stats;
 conversations + messages; **automations** (10 routes, §3.1); and the
 `/customers` compatibility shim (§6.1).
 
@@ -600,13 +779,28 @@ Account page, the page switches to its Cases tab.
 (`missing_account`, `unknown_account`); a `primaryContactId`, if given, must
 exist (`unknown_contact`) and be **actively** linked to that account
 (`contact_not_linked_to_account`). Legacy `customerId` is still accepted as an
-alias for `accountId`.
+alias for `accountId`. An optional **`category`** (Phase 7) is validated
+against the ten keys; `null`/omitted = uncategorized.
+
+**Case creation paths (all offer the optional Category):**
+1. Records → Cases → New case (`NewCaseDrawer`, `global` context).
+2. Account page → New Case (`account` context).
+3. Client page → New Case (`client` context).
+4. Records → Cases → **Board** → green "+" on the selected account card —
+   the Board's own older popup (`NewCaseModalForClient` in
+   `CasesBoard.tsx`): title, description, status pills, Category; posts
+   `customerId`, fixed medium priority, no primary contact (§6.3).
+5. Lead conversion with "create first Case" (needs `cases.create`; no
+   category — uncategorized).
 
 ### 3.3 Consolidated Records workspace
 
-- Sidebar: Dashboard, Leads, **Records**, Accounting, Insights, Settings.
-  Records replaces the separate Accounts / Clients / Cases entries and stays
-  highlighted on any records list or detail URL.
+- Sidebar (full set, System Owner): Dashboard, Leads, **Records**, Insights,
+  Messages, Accounting, Settings — each role sees only its permitted items
+  (§2 Frontend access). Records replaces the separate Accounts / Clients /
+  Cases entries and stays highlighted on any records list or detail URL.
+  Records tabs are permission-driven too (Business Advisors: Accounts and
+  Clients only).
 - `/records/:tab` with tabs **Accounts | Clients | Cases**
   (`pages/Records.tsx`). Each tab renders the existing page unchanged —
   `Accounts`, `Clients`, `CasesList` with its Table / Cards / Board views,
@@ -670,58 +864,84 @@ alias for `accountId`.
 
 | Area | State |
 |---|---|
-| Login + session gate | Works (insecure, §2) |
+| Sign-in / sessions | HttpOnly session cookie, scrypt passwords, throttling, same-origin check; every route guarded (§2 Authentication) |
+| RBAC | Permissions + own/team/all scope enforced by the API, mirrored by the web app (§2) |
 | Dashboard | Personalized by permission from `GET /api/dashboard` (§2 Dashboards) |
-| Leads | List, filter, create, edit, delete, convert |
-| Records → Accounts | List, search, detail with ~46 inline-editable fields, contacts, cases, New Case |
+| Leads | List, filter, create, edit, delete, convert; reassignment |
+| Records → Accounts | List, search, detail with ~46 inline-editable fields (by field group, sensitive fields masked), contacts, cases, New Case |
 | Records → Clients | List/cards, create, detail with linked accounts and cases, New Case |
-| Records → Cases | Table (sortable), Cards, Board; filters by status / priority / search / assignee |
-| Case detail | Overview, Contacts, Thread, Tasks, Documents, Automations; Client and Account links |
+| Records → Cases | Table (sortable Case # / Created, default Last Modified), Cards, Board; filters by status, priority, **category**, **escalation**, search, assignee; category/escalation markers |
+| Case detail | Overview, Contacts (call/contact log), **Thread (unified timeline)**, Tasks, Documents, Automations; Client and Account links; category, escalation banner/actions, closed date and resolution time, lifecycle & escalation history |
 | Case automations | Management as in §3.1; **no execution** |
-| Mentions | `@Name` parsed server-side, unread inbox in the messages widget |
-| Messages | DMs, groups, case tagging, soft delete with author check |
-| Insights | Charts off `/stats` and `/cases` |
+| Mentions | `@Name` in comments, resolved server-side to active employees who may view the case; your own inbox only |
+| Messages | DMs, groups, case tagging (filtered by case access), soft delete by the author; member-only |
+| Insights | Case analytics off `/stats` and `/cases` (`insights.cases.view`); Sales and People domains planned |
+| Accounting | **Prototype data only** (visibility gated: statements vs Payroll) |
+| Settings | Mostly prototype UI (local state), sections gated by permission |
 
 ### Test coverage
 
 `pnpm test`: Vitest + Supertest, **48 files / 644 tests** in
-`artifacts/api-server/test/`. Covers stable ownership (v2 migration,
-refusal on unmapped/ambiguous names, rename safety, spoofing, history),
-team scope and reassignment, authorization (every route declared,
-role × route for every role, record scope, redaction, forbidden fields,
-case/lead isolation, messages, mentions, B4), the permission core (the approved
-matrix cell by cell, resolver, Account field groups and redaction, navigation
-and route metadata, `/auth/me` permissions), authentication (passwords, sessions,
-expiry, revocation, throttling, spoofing, same-origin, the 401 on every route),
-the store migration, and the API end to end (stats, leads,
-conversion, accounts, contacts, links, cases incl. filters, create and update
-validation, tasks, documents, interactions, thread, mentions, messages,
-automations incl. scopes/fork/revert/delete, store migration, the `/customers`
-projection) plus three **pure frontend modules** imported directly:
-`lib/records.ts`, `lib/caseLinks.ts`, `lib/caseSort.ts`.
+`artifacts/api-server/test/`. Covers authentication (passwords, sessions,
+expiry, revocation, throttling, spoofing, same-origin, the 401 on every
+route), the permission core (the approved matrix cell by cell, resolver,
+Account field groups and redaction, navigation and route metadata, controls,
+dashboard rules), authorization (every route declared, role × route for
+every role, record scope, forbidden fields, case/lead isolation, messages,
+mentions), stable ownership (v1/v2 migrations, refusal on unmapped/ambiguous
+names, rename safety), team scope and reassignment, dashboards (scope, no
+leakage, zeros), case lifecycle/categories/escalations, the Thread feed
+(merging, newest-first order, ties, immutability, call aggregation,
+mentions, RBAC), a pre-Phase-7 store loading without migration, and the API
+end to end — plus pure frontend modules imported directly (`lib/records.ts`,
+`lib/caseLinks.ts`, `lib/caseSort.ts`, `lib/caseMeta.ts`, `lib/session.ts`).
 
 Isolation is enforced: `test/setup.ts` chdirs into a temp directory before the
 store loads, so the suite cannot touch the live `store.json`
 (`test/isolation.test.ts` asserts it). Pool is `forks`.
 
-**No React component is tested and there is no CI.** UI changes need a browser.
+`pnpm test:e2e`: **Playwright, 54 tests in 4 files** (`e2e/tests/`:
+`rbac.spec.ts`, `dashboard.spec.ts`, `lifecycle.spec.ts`,
+`thread.spec.ts`). It starts its own API on 3101 with a fresh temp store
+(`CASES_DATA_DIR`) and Vite on 5174; `E2E_BASE_URL` points it at servers you
+started yourself. `e2e/` is outside the pnpm workspace:
+`@playwright/test` 1.56.1 pinned in `e2e/package.json`, locked by
+`e2e/package-lock.json`, installed with `npm ci`.
+
+**CI** (`.github/workflows/ci.yml`, on push/PR to `main`): job `verify`
+(matrix Node 20 and 22: frozen `pnpm install`, `pnpm typecheck`,
+`pnpm test`, plus guards that the live store is absent and the checkout is
+unchanged afterwards) and job `e2e` (Node 22, `npm ci` in `e2e/`,
+Playwright Chromium). Actions pinned by SHA; read-only permissions.
+
+React components have no unit tests; browser behaviour is covered by the
+targeted Playwright suite.
 
 ---
 
 ## 5. Prototype-only and not started
 
 **Prototype-only** (local `useState`, hardcoded data, nothing persists):
-- **Accounting** (758 lines) — ledger, statements, payroll, all from constants.
-- **Settings** (938 lines) — invites, divisions/teams, pipeline stages,
-  company config.
+- **Accounting** (~780 lines) — ledger, statements, payroll, all from
+  constants. Only its visibility is real (RBAC).
+- **Settings** (~930 lines) — divisions/teams display, pipeline stages,
+  company config are local UI; sections are gated by permission. It does not
+  read or write the real `store.teams`.
 
-**Not started:**
-- **Automation execution** (see §3.1).
+**Not started / deferred:**
+- **Automation execution** (see §3.1) and any third-party integrations.
+- **SLA engine** — no SLA targets, timers, business-hours calendars or
+  state-specific filing timelines; **no automatic escalation**.
+- **People management** — no UI to invite, deactivate, rename or change
+  employees' roles/teams (planned sections stay hidden).
 - **AI layer** — case summaries, issue explanation, suggested replies. Nothing
   references any LLM.
+- **Billing / payments** — no Stripe, refunds, chargebacks, revenue,
+  commissions or goals.
+- **Phone system** — calls are logged by hand; no durations, recordings or
+  call volumes.
 - Client-facing comments (the thread is employees-only), real file upload
-  (documents are URL references), email/telephony ingestion (interactions
-  are logged by hand).
+  (documents are URL references), email ingestion.
 
 ---
 
@@ -759,18 +979,19 @@ contact; only `primaryContactId` is authoritative.
 
 ### 6.3 Duplicated case UI and case creation
 
-- `pages/CaseDetail.tsx` (956) and `components/CaseDetailModal.tsx` (783) are
-  two implementations of the case screen. The modal (opened from the Board)
-  has Overview, Contacts, Documents and Thread only — **no Tasks and no
-  Automations**.
+- `pages/CaseDetail.tsx` (~1030 lines) and `components/CaseDetailModal.tsx`
+  (~790) are two implementations of the case screen. The modal (opened from
+  the Board) has Overview, Contacts, Documents and Thread only — **no Tasks
+  and no Automations**. Both render the same unified Thread feed.
 - **Duplicate case creation on the Board:** `NewCaseModalForClient` in
   `CasesBoard.tsx` is a separate form. It posts `customerId` only, so cases
   created from the Board **never get a primary contact**, and it bypasses the
-  shared `NewCaseDrawer`. (Phase 7 follow-up: it does offer the optional
-  Category, from the shared `lib/caseMeta.ts` list — keep new Case fields
-  in both forms until they are merged.)
-- `components/layout/MessagesWidget.tsx` (998) and `pages/Messages.tsx` (394)
-  overlap; `/messages` is routed but not in the sidebar.
+  shared `NewCaseDrawer`. It does offer the optional Category (from the
+  shared `lib/caseMeta.ts` list) — keep new Case fields in both forms until
+  they are merged.
+- `components/layout/MessagesWidget.tsx` (~1000) and `pages/Messages.tsx`
+  (~400) overlap (both are reachable: the floating widget and the sidebar's
+  Messages page).
 
 ### 6.4 Dead files
 
@@ -781,44 +1002,52 @@ Unrouted and imported by nothing: `pages/Customers.tsx` (still links to
 ### 6.5 The three lib packages are stale
 
 - `lib/api-spec/openapi.yaml` documents ~11 paths from the pre-Account era.
-  No accounts, contacts, links, leads, interactions, thread, mentions, team,
-  auth or automations.
 - `lib/api-client-react` exports nothing; Orval has never run. **Do not run
   `pnpm api:generate`.**
-- `lib/db/src/schema.ts` models only the retired tables (customers, cases,
-  tasks, documents, conversations, members, messages, message tags). No
-  accounts, contacts, links, leads, users, interactions, thread, mentions or
-  automations; no migrations.
+- `lib/db/src/schema.ts` models only the retired tables; no migrations. The
+  app does not use it.
 
 ### 6.6 Data and auth
 
 - **JSON-file store**: single process, whole-file rewrites, no transactions,
-  no concurrent-user safety.
-- **Authorization is enforced by the API** (RBAC Phases 3–4) and reflected
-  by the web app (Phase 5).
-- **Ownership is by stable employee id** (Phase 4); display names are
-  labels. There is no rename feature yet — a future one should also refresh
-  the denormalized `ownerName` labels (history names stay as written).
+  no concurrent-user safety, no relational database.
 - **Demo credentials**: every employee uses `test123`; the login page lists
   them in development builds. Sessions and login throttling are in-process.
 - **Not production-grade**: no SSO/MFA, no password change or reset UI, no
-  audit log yet.
+  audit log, no People UI (no rename/deactivate/role changes). A future
+  rename feature should refresh the denormalized `ownerName` labels
+  (history names stay as written).
 - **Types duplicated** between `api-server/src/store.ts` and
-  `cases/src/lib/api.ts`; edit together.
+  `cases/src/lib/api.ts` (and the taxonomy between the two `caseMeta.ts`,
+  pinned equal by `test/case-meta.test.ts`); edit together.
 
 ### 6.7 Behaviour limits
 
-- **Last Modified ≠ last activity.** `Case.updatedAt` changes only on create
-  and `PATCH /cases/:id` (and on any PATCH, even one that changes nothing).
-  Thread entries, interactions, tasks, documents, case contacts and
-  automation edits do **not** touch it, so the default table order reflects
-  edits to the case record, not activity.
-- **Sort preference is not persisted.** It lives in `CasesList` state: kept
-  while switching Table / Cards / Board, reset by leaving the Cases tab,
-  navigating away or reloading. Not in the URL.
+- **Last Modified ≠ last activity.** `Case.updatedAt` changes on create,
+  `PATCH /cases/:id` (any PATCH, even a no-op) and reassignment. Comments,
+  call logs, tasks, documents, escalations and automation edits do **not**
+  touch it, so the default table order reflects edits to the case record.
+- **Sort preference is not persisted** (CasesList state; not in the URL).
 - **Automation delete safeguard is UI-only** (§3.1).
 - `findOrCreateDm()` is never called; duplicate DMs are reachable (pinned by
   `messages.test.ts`).
+- **Tasks have no assignee**; dashboards attribute task counts to the Case
+  owner. Task titles/descriptions/due dates are editable via
+  `PATCH /tasks/:id` (no screen edits titles; the Tasks tab only cycles
+  status). Tasks cannot be deleted.
+- **Documents cannot be edited or deleted**, and `POST /documents` accepts
+  any non-empty `fileUrl` string (no URL validation). The Documents tab
+  links the raw `fileUrl`; the Thread links only http(s) URLs.
+- **Calls have no duration field**; channels email/SMS/meeting/other are
+  logged the same way as calls.
+- **Lead conversion history is not reliable**: `convertedAt` lives on the
+  lead, the converting employee is not recorded, and deleting a lead loses
+  it — so no conversion metrics or leaderboard.
+- The Case Detail title field saves on every keystroke (one PATCH per key),
+  which is why title edits are not Thread events.
+- **Demo data ownership**: the seeded leads and accounts are owned by Iris,
+  Devon and Sara, so Business Advisor dashboards show real zeros until
+  records are reassigned to them.
 
 ### 6.8 Smaller items
 
@@ -826,37 +1055,42 @@ Unrouted and imported by nothing: `pages/Customers.tsx` (still links to
 - Tailwind v4 is a **beta** (`4.0.0-beta.6`); esbuild pinned to `0.21.5` by a
   root override.
 - `test/helpers/app.ts` duplicates `index.ts`'s error handler.
+- **React warning** (dev console): the Sidebar nests an `<a>` inside
+  Wouter's `<Link>` (which renders its own anchor) — "`<a>` cannot be a
+  descendant of `<a>`". Several older pages use the same `<Link><a>`
+  pattern; new code passes `className` to `<Link>` instead.
 - Stale code comments: the header comment of `CaseAutomationsTab.tsx` still
   says scope actions "arrive in a later stage" and globals are read-only
-  (both are implemented/changed); the comment above `legacyCustomerView()`
-  still mentions a `/customers` page.
+  (both are implemented); the comment above the `/customers` shim still
+  mentions the old `/customers` page.
 - Two zero-byte `_tmp_3_*` files from the machine transfer, git-ignored.
 
 ---
 
 ## 7. Recommended next work
 
-**In progress: role-based access** — see `role-based-access-plan.md`
-(Revision 1) in the Project. Phase 1 (identity foundation), Phase 2
-(permission core, `lib/access`), Phase 3 (backend enforcement) and Phase 4
-(stable ownership ids, team scope, reassignment) and Phase 5 (role-aware
-frontend, Playwright RBAC suite) and Phase 6 (personalized role dashboards)
-are done. The next phase starts only after approval.
+Nothing is in progress. Each phase starts only after the owner's explicit
+approval, and ends with typecheck, the unit/API suite, the Playwright suite
+and CI all green, committed separately and not pushed automatically.
+Candidate next phases (none started):
 
-1. **CI** — `pnpm install --frozen-lockfile && pnpm typecheck && pnpm test`
-   on push.
-2. **Frontend tests** for at least the case screens and Records.
-3. **Finish the Customer → Account migration and remove the stand-in contact**
-   (§6.1, §6.2) — including pointing the Board and the global New Case form
-   at `/api/accounts`, and replacing `NewCaseModalForClient` with the shared
-   `NewCaseDrawer` (§6.3).
-4. **Consolidate `CaseDetail` and `CaseDetailModal`.**
-5. **Decide `lib/db`, `lib/api-spec`, `lib/api-client-react`** — refresh or
-   delete.
-6. **Real persistence and real auth** before anyone but the author uses it.
-7. **Automation execution**, once integrations are chosen.
-8. **The AI layer** from the product brief.
-9. Back Accounting and Settings with real APIs, or hide them.
+1. **People management** — invite/deactivate employees, assign roles and
+   teams, rename (refreshing `ownerName` labels), backed by `people.*` and
+   `settings.teams.*` permissions and the real `store.teams`.
+2. **SLA and automatic escalation rules** on top of Phase 7's lifecycle and
+   escalation data (targets, business hours, breach timers).
+3. **Automation execution engine**, once integrations are chosen — only then
+   may the Thread emit `automation_execution`.
+4. **AI layer** from the product brief (case summary, issue explanation,
+   suggested reply), reading the unified Thread.
+5. Tech-debt cleanup (each a separate, approved decision): finish the
+   Customer → Account migration and the stand-in contact (§6.1–6.2); merge
+   the Board popup into `NewCaseDrawer` and `CaseDetailModal` into
+   `CaseDetail` (§6.3); validate document URLs; fix the Sidebar nested-link
+   warning; decide the stale `lib/*` packages; remove dead pages.
+6. **Real persistence** (a database) and production auth hardening before
+   anyone outside the team uses it.
+7. Back Accounting and Settings with real APIs, or keep them hidden.
 
 ---
 

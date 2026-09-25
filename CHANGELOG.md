@@ -9,9 +9,21 @@ recovered working tree — the project had no repository, so there is no history
 
 ## [Unreleased]
 
-Everything since the recovery release, 2026-09-22 → 2026-09-24.
-State at the end of this section: typecheck clean, **644 tests in 48 files**;
-Playwright 54 tests.
+Everything since the recovery release, 2026-09-22 → 2026-09-25.
+State at the end of this section (checkpoint at `280fa35`): typecheck clean,
+**644 tests in 48 files**; Playwright **54 tests**; GitHub Actions green
+(Node 20, Node 22, Playwright). RBAC Phases 1–6 and Phase 7 with its
+follow-ups are complete; no Phase 8 has started.
+
+### Documentation — checkpoint handoff (2026-09-25)
+- CLAUDE_HANDOFF.md re-synchronized with the code at `280fa35`: a "Start
+  here" section (purpose, sources of truth, migration warning, automations
+  not executing), role table, ownership/teams, per-role navigation, route
+  count (65), store (19 collections, schema v2), test/CI baseline, current
+  technical debt and next-phase options; obsolete statements removed.
+- CLAUDE.md gains a "Core rules" section and the Playwright suite; README.md
+  no longer claims roles have no effect, that there is no CI, or that
+  Messages is absent from the sidebar. No code changed.
 
 ### Changed — the Case Thread is newest first (2026-09-25)
 - The Case Thread is a reverse-chronological operational timeline: newest
@@ -437,7 +449,9 @@ Customer → Account migration unfinished; stand-in primary contact; the
 Board's separate New Case form (no primary contact); duplicated case detail
 UI; Last Modified ignores activity (thread, tasks, documents…); table sort
 not persisted; JSON-file store, plaintext passwords, no real auth; stale
-`lib/*` packages; no CI or component tests.
+`lib/*` packages; no CI or component tests. *(As of this entry. Since then
+CI, real authentication and Playwright tests were added — see the entries
+above and CLAUDE_HANDOFF.md §6 for the current list.)*
 
 ---
 

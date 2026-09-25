@@ -15,17 +15,58 @@ pnpm monorepo, TypeScript end to end.
 ```
 cases-app/
 ├─ artifacts/
-│  ├─ cases/         React 19 + Vite 5 frontend   (~14k lines)
-│  └─ api-server/    Express 5 API + in-memory store (~3.3k lines)
-└─ lib/
-   ├─ db/               Drizzle/Postgres schema — STALE, not wired up
-   ├─ api-spec/         OpenAPI 3.1 — STALE, pre-Account model
-   └─ api-client-react/ Orval target — never generated, exports nothing
+│  ├─ cases/         React 19 + Vite 5 frontend   (~16.7k lines)
+│  └─ api-server/    Express 5 API + in-memory JSON store (~7.2k lines; tests ~9.2k)
+├─ lib/
+│  ├─ access/           @cases/access — roles, permissions, scopes, navigation,
+│  │                    controls, dashboard rules (shared by API and web)
+│  ├─ db/               Drizzle/Postgres schema — STALE, not wired up
+│  ├─ api-spec/         OpenAPI 3.1 — STALE, pre-Account model
+│  └─ api-client-react/ Orval target — never generated, exports nothing
+├─ e2e/              Playwright suite (outside the pnpm workspace; npm ci)
+└─ .github/workflows/ci.yml
 ```
 
-Main navigation: Dashboard, Leads, **Records** (Accounts | Clients | Cases),
-Accounting, Insights, Settings. Automations live **inside each case**
-(Case Detail → Automations); they are managed, **never executed**.
+Navigation (each employee sees only what their permissions allow):
+Dashboard, Leads, **Records** (Accounts | Clients | Cases), Insights,
+Messages, Accounting (prototype data), Settings. Automations live **inside
+each case** (Case Detail → Automations); they are configured, **never
+executed**.
+
+## Core rules (read before changing anything)
+
+1. **Inspect before changing.** Read the code and CLAUDE_HANDOFF.md; don't
+   assume. Keep changes to what was asked.
+2. **Protect the live store** (`artifacts/api-server/data/store.json`):
+   never edit it by hand, never let tests touch it, never commit it.
+   **Stop `pnpm dev` before writing or running any store migration** — the
+   dev server hot-reloads (`tsx watch`) and migrates on startup; in Phase 4
+   that migrated the live store before the migration was reviewed. Prefer
+   additive nullable fields filled in `normalizeLoaded()` (no migration).
+3. **Identity and authority come from the session and stable ids**
+   (`ownerUserId`, `*ByUserId`, …) — never from body-supplied names
+   (`authorName`, `byName`, `ownerName`, `actorName`, …) or `X-User`.
+4. **Access decisions use `lib/access`** (`can`, `scopeOf`, `canOn`,
+   controls, navigation, dashboard rules) — never role-name checks. The
+   **backend is authoritative**; the frontend mirrors the same permissions
+   (hide, don't disable).
+5. **Only real data.** Never invent metrics, history, actors or timestamps
+   (e.g. no `closedAt` from `updatedAt`, no guessed categories). If data
+   doesn't exist, show nothing or say "not recorded".
+6. **Tests never mutate shared seed state** other tests read; build your own
+   fixtures. Don't weaken assertions or change production code to make a
+   test pass.
+7. **The Case Thread is operational history, not comments.** System entries
+   are derived from authoritative records or appended once to
+   `caseActivities`; they never parse mentions, are never editable, and
+   must not drift (snapshot mutable values, like `Task.createdTitle`).
+   Phone calls stay aggregated (one incoming, one outgoing card). Newest
+   first, ordered by the server.
+8. **Automations do not execute.** Never produce an "Automation ran" entry
+   or UI copy implying execution until a real engine exists.
+9. **Every change ends green**: `pnpm typecheck`, `pnpm test`,
+   `pnpm test:e2e`, and CI (Node 20, Node 22, Playwright). Commit each phase
+   separately; never push without the owner's approval.
 
 ## Commands
 
@@ -86,7 +127,9 @@ it, debounced, after every successful non-GET request.
   `/accounts` etc. (those are redirects now). Detail URLs are
   `/accounts/:id`, `/clients/:id`, `/cases/:id`.
 - **New cases** go through `components/cases/NewCaseDrawer.tsx` with a
-  `context` (`global` | `account` | `client`). Don't add another form.
+  `context` (`global` | `account` | `client`). Don't add another form. The
+  Board's older `NewCaseModalForClient` (CasesBoard.tsx) still exists — any
+  new Case field must be added there too until the two are merged.
 - **Case ↔ Account ↔ Contact rules are enforced on the server** in both
   `POST` and `PATCH /api/cases`. A primary contact must exist and be actively
   linked to the case's account. Don't rely on the UI for this.
@@ -172,10 +215,11 @@ it, debounced, after every successful non-GET request.
   the permission catalog, own/team/all scopes, role bundles, Account field
   groups with sensitive-read rules, Settings/Insights permissions, the
   resolver (`resolvePermissions`, `can`, `scopeOf`) and navigation/route
-  metadata. The API imports it through `src/access.ts` (a relative re-export,
-  so esbuild bundles it); the web app imports **types only** via the
-  `@cases/access` tsconfig path (a Vite alias comes with Phase 5).
-  `GET /api/auth/me` returns `{ user, teams, permissions }`. Never define a
+  metadata, per-record controls and dashboard rules. The API imports it
+  through `src/access.ts` (a relative re-export, so esbuild bundles it); the
+  web app imports it at runtime via the `@cases/access` Vite alias (plus a
+  tsconfig path). `GET /api/auth/me` returns
+  `{ user, teams, permissions, supervisedUserIds }`. Never define a
   role list or permission name anywhere else. Access changes must update
   `test/access-matrix.test.ts` — the approved matrix, cell by cell.
 - **Security settings are named and validated** in `src/config.ts`
@@ -199,14 +243,16 @@ it, debounced, after every successful non-GET request.
   copy or docs.
 - **Frontend data** is TanStack Query against the hand-written typed client in
   `artifacts/cases/src/lib/api.ts`. Keys in use include `["cases"]`,
-  `["case", id]`, `["case-thread", id]`, `["case-contacts", id]`,
+  `["case", id]`, `["case", id, "feed"]` (the Thread — refreshed by any
+  invalidation of `["case", id]`), `["case-thread", id]`,
+  `["case-contacts", id]`, `["dashboard"]`,
   `["case-automations", caseId]`, `["automation", id]`,
   `["automation-usage", id]`, `["accounts"]`, `["account", id]`,
   `["contacts"]`, `["contact", id]`, `["clients"]`, `["customers"]`,
   `["mentions"]`, `["stats"]`, `["team"]`. Mutations invalidate by key —
   match the existing invalidation sets.
 - **Pure logic modules** (`lib/records.ts`, `lib/caseLinks.ts`,
-  `lib/caseSort.ts`) import nothing, so the API test suite can import and test
+  `lib/caseSort.ts`, `lib/caseMeta.ts`, `lib/session.ts`) import nothing, so the API test suite can import and test
   them under Node. Keep new testable UI logic in that shape.
 - **Routing** is Wouter, not React Router. **Icons** are Lucide. **Charts** are
   Recharts. **Animation** is Framer Motion. **Styling** is Tailwind v4 (beta)
@@ -255,7 +301,21 @@ Vitest + Supertest, in `artifacts/api-server/test/` — 48 files, 644 tests.
   can no longer produce (e.g. a dangling `primaryContactId`) may be set up by
   importing `store` from `../src/store` — that store is the file's isolated
   copy.
-- React components are **not** tested. Only the pure `lib/` modules above are.
+- React components have no unit tests; only the pure `lib/` modules above
+  are imported by the API suite. Browser behaviour is covered by the
+  Playwright suite below.
+
+### Browser suite (Playwright)
+
+`pnpm test:e2e` — `e2e/` (54 tests in `rbac`, `dashboard`, `lifecycle`,
+`thread` specs). It installs `@playwright/test` 1.56.1 from
+`e2e/package-lock.json` with `npm ci` (e2e/ is outside the pnpm workspace),
+starts its own API on 3101 with a fresh temp store (`CASES_DATA_DIR`) and
+Vite on 5174, so it never touches the live store; set `E2E_BASE_URL` to use
+servers you started. Keep it targeted — exhaustive cases belong in the API
+suite. CI runs it as the `e2e` job; the `verify` job runs typecheck + test
+on Node 20 and 22 and fails if the live store appears or the checkout
+changes.
 
 ## Guardrails
 
@@ -286,5 +346,6 @@ Do not, without being asked:
 3. The flow you touched actually runs — boot the API and exercise it, don't
    infer from types.
 4. `store.json` is intact (`git status` should not show it; it is ignored).
-5. `pnpm test` is green. UI changes still need a browser.
+5. `pnpm test` is green, and `pnpm test:e2e` for anything a browser can see.
 6. CLAUDE_HANDOFF.md, README.md and CHANGELOG.md still describe reality.
+7. Committed separately, not pushed; CI green after the owner pushes.
