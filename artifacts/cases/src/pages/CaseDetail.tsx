@@ -766,7 +766,7 @@ function ThreadTab({
   onViewCalls,
 }: {
   caseId: number;
-  /** The unified feed: comments and system activity, oldest first. */
+  /** The unified feed: comments and system activity, newest first (server order). */
   entries: FeedEntry[];
   loading: boolean;
   /** Commenting needs cases.work on this case. */

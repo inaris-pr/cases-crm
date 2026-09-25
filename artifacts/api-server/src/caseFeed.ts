@@ -135,12 +135,20 @@ const TYPE_RANK: Record<FeedEntryType, number> = {
   comment: 17,
 };
 
+/**
+ * Same-instant slot shared by every recorded change (category, priority,
+ * owner, account, primary client, task completed/reopened): after a task's
+ * creation, so "created" precedes "completed" when both happen at once.
+ */
+const ACTIVITY_SLOT = 8.5;
+
 const actor = (userId: number | null, name: string | null): FeedActor | null =>
   name ? { userId, name } : null;
 
 /**
- * The Case's Thread feed, oldest first (the Thread's existing order). The
- * caller must already have checked that the viewer may see this Case.
+ * The Case's Thread feed: a reverse-chronological operational timeline,
+ * NEWEST activity first. The caller must already have checked that the
+ * viewer may see this Case.
  */
 export function buildCaseFeed(caseId: number, s: Store = store): FeedEntry[] {
   const out: FeedEntry[] = [];
@@ -259,16 +267,21 @@ export function buildCaseFeed(caseId: number, s: Store = store): FeedEntry[] {
     });
   }
 
-  // Chronological. Recorded changes that share a millisecond keep the order
-  // they happened in (their ids); otherwise same-instant entries fall back to
-  // a fixed type order, then the key — the result is always the same.
-  const activityId = (e: FeedEntry) => (e.key.startsWith("activity:") ? Number(e.key.slice(9)) : null);
-  return out.sort((a, b) => {
-    const byTime = Date.parse(a.at) - Date.parse(b.at);
-    if (byTime) return byTime;
-    const ia = activityId(a);
-    const ib = activityId(b);
-    if (ia !== null && ib !== null) return ia - ib;
-    return TYPE_RANK[a.type] - TYPE_RANK[b.type] || a.key.localeCompare(b.key, "en", { numeric: true });
-  });
+  // Newest first: the exact reverse of a total chronological order.
+  // Chronological order = time, then (for entries sharing a millisecond) a
+  // fixed slot per type — every recorded change (caseActivities) shares one
+  // slot and is ordered by its id, i.e. the order it happened in — then the
+  // key. Reversing it puts the latest action first, also within a tie, and
+  // the same data always yields the same order.
+  const activityId = (e: FeedEntry) => (e.key.startsWith("activity:") ? Number(e.key.slice(9)) : 0);
+  const slot = (e: FeedEntry) => (e.key.startsWith("activity:") ? ACTIVITY_SLOT : TYPE_RANK[e.type]);
+  return out
+    .sort(
+      (a, b) =>
+        Date.parse(a.at) - Date.parse(b.at) ||
+        slot(a) - slot(b) ||
+        activityId(a) - activityId(b) ||
+        a.key.localeCompare(b.key, "en", { numeric: true }),
+    )
+    .reverse();
 }

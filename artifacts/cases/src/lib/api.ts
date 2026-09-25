@@ -682,7 +682,7 @@ export interface DashboardData {
 
 // ── Case Thread feed (Phase 7 follow-up) — mirrors api-server/src/caseFeed.ts ──
 // GET /api/cases/:id/feed: human comments and system activity, merged and
-// ordered on the server (oldest first).
+// ordered on the server, newest first. Render in the order received.
 
 export interface FeedActor {
   userId: number | null;

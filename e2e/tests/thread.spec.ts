@@ -14,6 +14,11 @@ async function newCase(page: Page, title: string) {
 }
 const openTab = (page: Page, name: RegExp) => page.getByRole("button", { name }).first().click();
 const feed = (page: Page, type: string) => page.locator(`[data-testid="case-feed"] [data-testid="feed-${type}"]`);
+/** The timeline's entries, top to bottom, as rendered. */
+const feedOrder = (page: Page) =>
+  page
+    .locator('[data-testid="case-feed"] > [data-testid^="feed-"]')
+    .evaluateAll((els) => els.map((e) => e.getAttribute("data-testid")));
 
 test("comment, category, priority and reassignment all appear in Thread, in order", async ({ page }) => {
   await login(page, EMAIL.systemOwner);
@@ -40,11 +45,51 @@ test("comment, category, priority and reassignment all appear in Thread, in orde
   await expect(feed(page, "owner_change")).toContainText("Sara Mitchell");
   await expect(feed(page, "owner_change")).toContainText("Reassigned by Iris Burgos");
 
-  const types = await page
-    .locator('[data-testid="case-feed"] > [data-testid^="feed-"]')
-    .evaluateAll((els) => els.map((e) => e.getAttribute("data-testid")));
-  expect(types).toEqual(["feed-comment", "feed-category_change", "feed-priority_change", "feed-owner_change"]);
+  // Newest first: the last action is on top.
+  expect(await feedOrder(page)).toEqual(["feed-owner_change", "feed-priority_change", "feed-category_change", "feed-comment"]);
   await expect(page.getByTestId("thread-count")).toHaveText("4");
+});
+
+test("newest first: a new comment lands on top, a new call lifts its card, reload keeps the order", async ({ page }) => {
+  await login(page, EMAIL.systemOwner);
+  const c = await newCase(page, `Thread order ${Date.now()}`);
+  const call = async (summary: string) => {
+    const res = await page.request.post(`/api/cases/${c.id}/contacts`, { data: { direction: "outbound", channel: "phone", summary, contact: "Amelia" } });
+    expect(res.status()).toBe(201);
+  };
+  // In sequence: a call, a category change, a priority change.
+  await call("First outbound");
+  await page.request.patch(`/api/cases/${c.id}`, { data: { category: "ein_tax" } });
+  await page.request.patch(`/api/cases/${c.id}`, { data: { priority: "high" } });
+
+  await page.goto(`/cases/${c.id}`);
+  await openTab(page, /^Thread/);
+  await expect(page.getByTestId("thread-count")).toHaveText("3");
+  expect(await feedOrder(page)).toEqual(["feed-priority_change", "feed-category_change", "feed-calls_outgoing_summary"]);
+  // Nothing scrolls the page to the bottom: the composer and the newest
+  // activity are what the employee sees.
+  await expect(page.getByPlaceholder(/Share a note with the team about this case/)).toBeInViewport();
+  await expect(page.locator('[data-testid="case-feed"] > [data-testid^="feed-"]').first()).toBeInViewport();
+
+  await page.getByPlaceholder(/Share a note with the team about this case/).fill("Newest note");
+  await page.getByRole("button", { name: /^Post$/ }).click();
+  await expect(feed(page, "comment")).toContainText("Newest note");
+  expect(await feedOrder(page)).toEqual([
+    "feed-comment", "feed-priority_change", "feed-category_change", "feed-calls_outgoing_summary",
+  ]);
+
+  await call("Second outbound");
+  await page.reload();
+  await openTab(page, /^Thread/);
+  await expect(feed(page, "calls_outgoing_summary").getByTestId("call-count")).toHaveText("2 calls");
+  const expected = ["feed-calls_outgoing_summary", "feed-comment", "feed-priority_change", "feed-category_change"];
+  expect(await feedOrder(page)).toEqual(expected);
+  await expect(page.getByTestId("thread-count")).toHaveText("4");
+
+  await page.reload();
+  await openTab(page, /^Thread/);
+  await expect(feed(page, "calls_outgoing_summary")).toBeVisible();
+  expect(await feedOrder(page)).toEqual(expected);
 });
 
 test("task created and completed, and an uploaded document with a clickable name", async ({ page }) => {

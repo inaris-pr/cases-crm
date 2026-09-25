@@ -1857,8 +1857,9 @@ export function buildApiRouter(): Router {
 
   /**
    * The unified Thread feed (Phase 7 follow-up): human comments and system
-   * activity, merged and ordered on the server (oldest first). Same access
-   * as the Case itself. GET /cases/:id/thread still returns comments only.
+   * activity, merged and ordered on the server, NEWEST first (a
+   * reverse-chronological timeline). Same access as the Case itself.
+   * GET /cases/:id/thread still returns comments only (oldest first, as before).
    */
   r.get(
     "/cases/:id/feed",

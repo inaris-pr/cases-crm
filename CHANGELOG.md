@@ -11,7 +11,19 @@ recovered working tree — the project had no repository, so there is no history
 
 Everything since the recovery release, 2026-09-22 → 2026-09-24.
 State at the end of this section: typecheck clean, **644 tests in 48 files**;
-Playwright 53 tests.
+Playwright 54 tests.
+
+### Changed — the Case Thread is newest first (2026-09-25)
+- The Case Thread is a reverse-chronological operational timeline: newest
+  activity first, right under the composer, in Case Detail and the Board's
+  case popup alike. The server orders the feed; the browser renders it as
+  received (no reversed-layout CSS). A new comment appears at the top; a new
+  call moves its (single) call card to the top. Ties within a millisecond are
+  the exact reverse of the chronological tie order, stable on every read.
+  Thread count unchanged. `GET /cases/:id/thread` (comments only) is unchanged.
+- Tests: feed ordering assertions updated to newest first, plus tie
+  stability and incoming-card movement (API/unit, 644 total); 1 Playwright
+  test (sequence, new comment on top, new call lifts its card, reload).
 
 ### Fixed — Thread history immutability: task titles (2026-09-25)
 - "Task created" entries now show the title the task was created with
@@ -33,7 +45,7 @@ Playwright 53 tests.
   uploaded (name links to the document), logged emails/SMS/meetings, and
   ONE outgoing and ONE incoming phone-call card (count, latest call, up to
   three previous, "View call details" → Contacts tab), derived from the
-  call log and placed at the latest call. Human comments and @-mentions are
+  call log and positioned by the latest call. Human comments and @-mentions are
   unchanged; system entries are read-only and never mention anyone.
 - Every system entry is attributed to the signed-in employee who caused it
   (id + historical name). Nothing earlier is fabricated: older tasks and

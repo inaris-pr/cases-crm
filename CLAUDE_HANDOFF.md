@@ -12,7 +12,7 @@ stable ownership ids and real team scope** and **RBAC Phase 5 — role-aware
 frontend** and **RBAC Phase 6 — personalized role dashboards** and **Phase 7 —
 case lifecycle, categories & escalations** (with the unified Case Thread
 follow-up). Typecheck clean; **644 tests across 48 files**, all passing;
-Playwright 53 tests. Default branch `main`, pushed to the private
+Playwright 54 tests. Default branch `main`, pushed to the private
 remote `inaris-pr/cases-crm`.
 
 ---
@@ -273,7 +273,7 @@ same lib/access rules the API enforces (`@cases/access`, a Vite alias):
   (active, can view that record type, inside the caller's assign scope)
   and sends `{ ownerUserId }`.
 - **Dashboard**: replaced by the Phase 6 dashboards (below).
-- **Browser tests**: `e2e/` (Playwright, 53 tests, `pnpm test:e2e`) starts its
+- **Browser tests**: `e2e/` (Playwright, 54 tests, `pnpm test:e2e`) starts its
   own API (fresh temp store via `CASES_DATA_DIR`) and Vite on 3101/5174;
   CI job `e2e`. e2e/ is outside the pnpm workspace; `@playwright/test` is
   pinned exactly in `e2e/package.json` and locked by `e2e/package-lock.json`
@@ -415,8 +415,13 @@ from another and nothing is classified or escalated automatically.
 
 The Thread tab shows human comments interleaved with system activity, from
 `GET /api/cases/:id/feed` (`src/caseFeed.ts`): `{ caseId, count, entries }`,
-merged and ordered on the server, oldest first (the Thread's existing
-order); ties broken by type, then key. Same access as the Case
+merged and ordered on the server. **The Case Thread is a reverse-chronological
+operational timeline: newest activity first**, directly under the composer
+(Case Detail and the Board's case popup render the server's order as-is).
+Ties within a millisecond: the exact reverse of chronological order — recorded
+changes (`caseActivities`) latest-recorded first by id, other entries by a
+fixed type slot, then key — so the same data always gives the same order.
+Same access as the Case
 (`cases.view` + record scope). `GET /cases/:id/thread` still returns
 comments only; posting comments (and @-mentions) is unchanged.
 
@@ -428,7 +433,7 @@ comments only; posting comments (and @-mentions) is unchanged.
 | `escalation_created`, `escalation_resolved` | `caseEscalations` |
 | `task_created` | `tasks` (`createdAt`, `createdByUserId/Name`, `createdTitle` — the title at creation; titles are editable via `PATCH /tasks/:id`, so the entry never uses the current title. Tasks older than this field keep the title as first loaded after the upgrade, frozen, and the entry says "title as first recorded") |
 | `document_uploaded` | `documents` (`createdAt`, `uploadedByUserId/Name`); `href` only for an http(s) `fileUrl` (the Documents tab's link), else no link |
-| `calls_outgoing_summary`, `calls_incoming_summary` | `caseInteractions` with channel `phone`, ONE entry per direction: `count`, `latest` (who, when, contact, summary), up to 3 `previous`; placed at the latest call, recomputed on every read — no stored counter |
+| `calls_outgoing_summary`, `calls_incoming_summary` | `caseInteractions` with channel `phone`, ONE entry per direction: `count`, `latest` (who, when, contact, summary), up to 3 `previous`; positioned by its latest call (so a new call moves the card to the top), recomputed on every read — no stored counter |
 | `contact_logged` | `caseInteractions` with other channels (email, SMS, meeting, other) — one compact entry each |
 | `document_removed`, `automation_execution` | reserved types, never produced: no document removal exists, and no automation engine exists (the Run button only animates) |
 

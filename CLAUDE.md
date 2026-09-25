@@ -38,7 +38,7 @@ Run from `cases-app/`. Requires Node ≥20 and pnpm 9.0.0 (`corepack prepare pnp
 | `pnpm dev:web` | Frontend only (proxies /api to :3001) |
 | `pnpm typecheck` | tsc --noEmit across the workspace (API src + tests, web, lib/db, lib/access) — **must stay clean** |
 | `pnpm test` | Vitest + Supertest suite (48 files, 644 tests) — **must stay green** |
-| `pnpm test:e2e` | Playwright RBAC, dashboard and case-lifecycle browser suite (e2e/, 53 tests; own API + Vite on 3101/5174, temp data) |
+| `pnpm test:e2e` | Playwright RBAC, dashboard and case-lifecycle browser suite (e2e/, 54 tests; own API + Vite on 3101/5174, temp data) |
 | `pnpm build` | esbuild bundle for the API, `tsc -b && vite build` for the web |
 | `pnpm api:generate` | Orval regen from the OpenAPI spec — **do not run**; the spec is stale |
 
@@ -157,7 +157,8 @@ it, debounced, after every successful non-GET request.
   and filled in `normalizeLoaded()` — no schema bump or migration unless
   unavoidable (and then stop `pnpm dev` first: hot reload must never run a
   migration). Details: CLAUDE_HANDOFF.md §2 "Case lifecycle".
-- **The Case Thread is a server-merged timeline** (`GET /cases/:id/feed`,
+- **The Case Thread is a server-merged, reverse-chronological timeline —
+  newest activity first** (`GET /cases/:id/feed`; the UI never re-sorts it,
   `src/caseFeed.ts`). Derive entries from the authoritative record
   whenever one exists; only changes with no record of their own go into
   the append-only `caseActivities` via `recordCaseActivity` (real changes

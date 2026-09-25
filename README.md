@@ -26,7 +26,7 @@ practice — leads, companies, the people behind them, and the matters in flight
   Contacts, Thread, Tasks, Documents and **Automations**; a primary
   **category**, manual **escalations** with reason and history, closed date
   and resolution time (when known), and the lifecycle history. The
-  **Thread** is the Case's timeline: comments plus automatic activity
+  **Thread** is the Case's timeline, newest first: comments plus automatic activity
   (status, category, priority, owner, escalations, tasks, documents with
   links, logged emails/meetings) and one summary card each for outgoing
   and incoming phone calls.
@@ -110,7 +110,7 @@ arrives with the role-based access phases.
 | `pnpm dev:web` | Frontend only |
 | `pnpm typecheck` | TypeScript across the workspace — currently clean |
 | `pnpm test` | Test suite (Vitest + Supertest) — 644 tests in 48 files |
-| `pnpm test:e2e` | Playwright RBAC, dashboard and case-lifecycle browser suite (e2e/) — 53 tests |
+| `pnpm test:e2e` | Playwright RBAC, dashboard and case-lifecycle browser suite (e2e/) — 54 tests |
 | `pnpm build` | Production builds for everything |
 | `pnpm api:generate` | Orval regen — **don't**, the spec it reads is stale |
 

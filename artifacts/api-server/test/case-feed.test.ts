@@ -35,7 +35,7 @@ async function newCase(api: (typeof who)[keyof typeof who], extra: Record<string
 const tick = () => new Promise((r) => setTimeout(r, 3));
 
 describe("the feed", () => {
-  it("merges comments and system activity, oldest first, deterministically", async () => {
+  it("merges comments and system activity, NEWEST first, deterministically", async () => {
     const id = await newCase(who.devon);
     await who.devon.post(`/cases/${id}/thread`, { body: "First note" });
     await tick();
@@ -44,9 +44,10 @@ describe("the feed", () => {
     await who.devon.post(`/cases/${id}/thread`, { body: "Second note" });
     const entries = await feed(who.devon, id);
     expect(entries.map((e) => e.type)).toEqual(["comment", "priority_change", "comment"]);
-    expect(entries[0].comment.body).toBe("First note");
+    expect(entries[0].comment.body).toBe("Second note"); // newest first…
+    expect(entries[2].comment.body).toBe("First note"); // …oldest last
     const times = entries.map((e) => Date.parse(e.at));
-    expect(times).toEqual([...times].sort((a, b) => a - b));
+    expect(times).toEqual([...times].sort((a, b) => b - a));
     expect(await feed(who.devon, id)).toEqual(entries);
   });
 
@@ -78,7 +79,7 @@ describe("case changes", () => {
     await who.devon.patch(`/cases/${id}`, { category: "filing_correction" }); // no-op
     await who.devon.patch(`/cases/${id}`, { category: null });
     const entries = ofType(await feed(who.devon, id), "category_change");
-    expect(entries.map((e) => [e.from, e.to])).toEqual([["compliance", "filing_correction"], ["filing_correction", null]]);
+    expect(entries.map((e) => [e.from, e.to])).toEqual([["filing_correction", null], ["compliance", "filing_correction"]]);
     expect(entries[0].actor).toEqual({ userId: uid("Devon Park"), name: "Devon Park" });
   });
 
@@ -128,9 +129,9 @@ describe("case changes", () => {
     await who.devon.patch(`/cases/${id}`, { status: "completed" });
     const entries = ofType(await feed(who.devon, id), "status_change");
     const events = store.caseStatusEvents.filter((e) => e.caseId === id);
-    expect(entries.map((e) => e.key)).toEqual(events.map((e) => `status:${e.id}`));
-    expect(entries.map((e) => e.kind)).toEqual(["status_change", "closed", "reopened", "closed"]);
-    expect(entries[2].actor!.name).toBe("Nadia Flores");
+    expect(entries.map((e) => e.key)).toEqual(events.map((e) => `status:${e.id}`).reverse());
+    expect(entries.map((e) => e.kind)).toEqual(["closed", "reopened", "closed", "status_change"]);
+    expect(entries[1].actor!.name).toBe("Nadia Flores");
     // The lifecycle card still reads the same authoritative events.
     expect((await who.devon.get(`/cases/${id}`)).body.statusHistory).toHaveLength(4);
   });
@@ -160,31 +161,38 @@ describe("tasks and documents", () => {
     await who.devon.patch(`/tasks/${task.id}`, { status: "completed" });
     await who.devon.patch(`/tasks/${task.id}`, { title: "Renamed task" }); // not an event
     const entries = await feed(who.devon, id);
-    expect(entries.map((e) => e.type)).toEqual(["task_created", "task_completed", "task_reopened", "task_completed"]);
+    expect(entries.map((e) => e.type)).toEqual(["task_completed", "task_reopened", "task_completed", "task_created"]);
     // History does not follow the later rename: the title as created.
-    expect(entries[0]).toMatchObject({ title: "Prepare amendment filing", titleSource: "creation", actor: { name: "Devon Park" } });
-    expect(entries[1]).toMatchObject({ title: "Prepare amendment filing", actor: { name: "Nadia Flores" } }); // title as completed
-    expect(entries[2]).toMatchObject({ toStatus: "in_progress", actor: { name: "Devon Park" } });
+    expect(entries[3]).toMatchObject({ title: "Prepare amendment filing", titleSource: "creation", actor: { name: "Devon Park" } });
+    expect(entries[2]).toMatchObject({ title: "Prepare amendment filing", actor: { name: "Nadia Flores" } }); // title as completed
+    expect(entries[1]).toMatchObject({ toStatus: "in_progress", actor: { name: "Devon Park" } });
   });
 
-  it("changes recorded in the same millisecond keep the order they happened in", async () => {
+  it("entries sharing a millisecond: latest action first, the same order on every read", async () => {
     const id = await newCase(who.devon);
     const task = (await who.devon.post("/tasks", { caseId: id, title: "Same instant" })).body;
     await who.devon.patch(`/tasks/${task.id}`, { status: "completed" });
     await who.devon.patch(`/tasks/${task.id}`, { status: "pending" });
-    await who.devon.patch(`/tasks/${task.id}`, { status: "completed" });
-    // Force every recorded change onto one timestamp.
-    const same = store.caseActivities.filter((a) => a.caseId === id);
-    for (const a of same) a.at = same[0].at;
-    expect((await feed(who.devon, id)).filter((e) => e.type !== "task_created").map((e) => e.type)).toEqual([
-      "task_completed", "task_reopened", "task_completed",
+    await who.devon.patch(`/cases/${id}`, { priority: "high" });
+    await who.devon.post(`/cases/${id}/thread`, { body: "Same-instant note" });
+    // Force everything onto one timestamp.
+    const at = store.tasks.find((t) => t.id === task.id)!.createdAt;
+    for (const a of store.caseActivities.filter((x) => x.caseId === id)) a.at = at;
+    store.threadEntries.find((t) => t.caseId === id)!.createdAt = at;
+    const first = await feed(who.devon, id);
+    // Recorded changes keep the reverse of the order they happened in.
+    expect(first.filter((e) => e.key.startsWith("activity:")).map((e) => e.type)).toEqual([
+      "priority_change", "task_reopened", "task_completed",
     ]);
+    // "Task created" stays below the completion it preceded.
+    expect(first.findIndex((e) => e.type === "task_created")).toBeGreaterThan(first.findIndex((e) => e.type === "task_completed"));
+    for (let i = 0; i < 3; i++) expect(await feed(who.devon, id)).toEqual(first);
   });
 
   it("a task created already completed records its completion", async () => {
     const id = await newCase(who.devon);
     await who.devon.post("/tasks", { caseId: id, title: "Already done", status: "completed" });
-    expect((await feed(who.devon, id)).map((e) => e.type)).toEqual(["task_created", "task_completed"]);
+    expect((await feed(who.devon, id)).map((e) => e.type)).toEqual(["task_completed", "task_created"]);
   });
 
   it("document uploaded: uploader, and a link only to the document's own http(s) URL", async () => {
@@ -192,7 +200,8 @@ describe("tasks and documents", () => {
     const good = (await who.devon.post("/documents", { caseId: id, filename: "Articles of Organization.pdf", fileUrl: "https://example.com/docs/aoo.pdf" })).body;
     await who.devon.post("/documents", { caseId: id, filename: "bad.pdf", fileUrl: "javascript:alert(1)" });
     await who.devon.post("/documents", { caseId: id, filename: "local.pdf", fileUrl: "/files/local.pdf" });
-    const docs = ofType(await feed(who.devon, id), "document_uploaded");
+    // Newest first: local.pdf, bad.pdf, then the first upload.
+    const docs = ofType(await feed(who.devon, id), "document_uploaded").reverse();
     expect(docs[0]).toMatchObject({
       documentId: good.id, filename: "Articles of Organization.pdf", href: "https://example.com/docs/aoo.pdf",
       actor: { userId: uid("Devon Park"), name: "Devon Park" },
@@ -302,7 +311,7 @@ describe("calls", () => {
     await tick();
     await who.devon.post(`/cases/${id}/thread`, { body: "Between calls" });
     let entries = await feed(who.devon, id);
-    expect(entries.map((e) => e.type)).toEqual(["calls_outgoing_summary", "calls_incoming_summary", "comment"]);
+    expect(entries.map((e) => e.type)).toEqual(["comment", "calls_incoming_summary", "calls_outgoing_summary"]);
     const out1 = ofType(entries, "calls_outgoing_summary")[0];
     expect(out1).toMatchObject({ count: 2, latest: { summary: "Second outbound", by: { name: "Sara Mitchell" } } });
     expect(out1.previous.map((p: { by: { name: string } }) => p.by.name)).toEqual(["Devon Park"]);
@@ -314,8 +323,15 @@ describe("calls", () => {
     expect(ofType(entries, "calls_outgoing_summary")).toHaveLength(1);
     const out2 = ofType(entries, "calls_outgoing_summary")[0];
     expect(out2).toMatchObject({ count: 3, at: third.createdAt, latest: { id: third.id } });
-    // It now sits after the comment: its place is its latest call.
-    expect(entries.map((e) => e.type)).toEqual(["calls_incoming_summary", "comment", "calls_outgoing_summary"]);
+    // It moved up to the top: its place is its latest call.
+    expect(entries.map((e) => e.type)).toEqual(["calls_outgoing_summary", "comment", "calls_incoming_summary"]);
+
+    await tick();
+    const incoming = (await log(who.sara, id, "inbound", "phone", "Client called back")).body;
+    entries = await feed(who.devon, id);
+    // Same for incoming: one card, count up, now first.
+    expect(entries.map((e) => e.type)).toEqual(["calls_incoming_summary", "calls_outgoing_summary", "comment"]);
+    expect(entries[0]).toMatchObject({ count: 2, at: incoming.createdAt, latest: { id: incoming.id } });
     // The feed counts the card once, however many calls.
     expect((await who.devon.get(`/cases/${id}/feed`)).body.count).toBe(3);
   });
@@ -334,7 +350,7 @@ describe("calls", () => {
     await log(who.devon, id, "outbound", "email", "Sent the invoice");
     await log(who.devon, id, "inbound", "meeting", "Kick-off");
     const entries = await feed(who.devon, id);
-    expect(entries.map((e) => [e.type, e.channel])).toEqual([["contact_logged", "email"], ["contact_logged", "meeting"]]);
+    expect(entries.map((e) => [e.type, e.channel])).toEqual([["contact_logged", "meeting"], ["contact_logged", "email"]]);
   });
 });
 
