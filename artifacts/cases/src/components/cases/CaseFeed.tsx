@@ -219,6 +219,12 @@ function FeedItem({ entry, onViewCalls }: { entry: FeedEntry; onViewCalls?: () =
       return (
         <SystemRow entry={entry} icon={ListPlus} tone="#fbbf24" title="Task created" byline={entry.actor ? `Created by ${entry.actor.name}` : "Creator not recorded"}>
           {entry.title}
+          {entry.titleSource === "first_recorded" && (
+            <span className="text-white/35" title="This task predates history tracking: its title as first recorded">
+              {" "}
+              · title as first recorded
+            </span>
+          )}
         </SystemRow>
       );
     case "task_completed":

@@ -109,7 +109,7 @@ arrives with the role-based access phases.
 | `pnpm dev:api` | API only |
 | `pnpm dev:web` | Frontend only |
 | `pnpm typecheck` | TypeScript across the workspace — currently clean |
-| `pnpm test` | Test suite (Vitest + Supertest) — 638 tests in 48 files |
+| `pnpm test` | Test suite (Vitest + Supertest) — 644 tests in 48 files |
 | `pnpm test:e2e` | Playwright RBAC, dashboard and case-lifecycle browser suite (e2e/) — 53 tests |
 | `pnpm build` | Production builds for everything |
 | `pnpm api:generate` | Orval regen — **don't**, the spec it reads is stale |

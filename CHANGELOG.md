@@ -10,8 +10,20 @@ recovered working tree — the project had no repository, so there is no history
 ## [Unreleased]
 
 Everything since the recovery release, 2026-09-22 → 2026-09-24.
-State at the end of this section: typecheck clean, **638 tests in 48 files**;
+State at the end of this section: typecheck clean, **644 tests in 48 files**;
 Playwright 53 tests.
+
+### Fixed — Thread history immutability: task titles (2026-09-25)
+- "Task created" entries now show the title the task was created with
+  (`Task.createdTitle`), not the current title, which `PATCH /tasks/:id`
+  can change. Older tasks keep the title as first recorded (frozen on the
+  first load after the upgrade) and are labelled so. `createdTitle` cannot
+  be written through the API.
+- Audit: documents, comments, call logs, status history, escalations and
+  recorded activities cannot be edited after the event, so their entries
+  were already stable; tests now pin that. Call cards stay intentionally
+  live.
+- Tests: 6 API/unit tests.
 
 ### Added — Phase 7 follow-up: the Case Thread as a unified timeline (2026-09-25)
 - **Thread = comments + system activity**, merged and ordered on the server

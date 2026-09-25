@@ -284,6 +284,13 @@ export interface Task {
   /** Who created the task (the session's employee). */
   createdByUserId: number | null;
   createdByName: string | null;
+  /**
+   * The title as it was when the task was created — the "Task created"
+   * Thread entry shows this, never the current (editable) title. For a task
+   * that predates this field it holds the title as first recorded (frozen on
+   * the first load after the upgrade); the Thread labels those.
+   */
+  createdTitle: string;
   /** The CURRENT completion: set when the task becomes completed, cleared when reopened. */
   completedAt: string | null;
   completedByUserId: number | null;
@@ -678,9 +685,17 @@ export function makeAccount(
  * completed task has no known completion time or actor either.)
  */
 function seedTasks(
-  rows: Omit<Task, "createdByUserId" | "createdByName" | "completedAt" | "completedByUserId" | "completedByName">[],
+  rows: Omit<Task, "createdByUserId" | "createdByName" | "createdTitle" | "completedAt" | "completedByUserId" | "completedByName">[],
 ): Task[] {
-  return rows.map((t) => ({ ...t, createdByUserId: null, createdByName: null, completedAt: null, completedByUserId: null, completedByName: null }));
+  return rows.map((t) => ({
+    ...t,
+    createdByUserId: null,
+    createdByName: null,
+    createdTitle: t.title, // seeded as-is: the seed's title IS its creation title
+    completedAt: null,
+    completedByUserId: null,
+    completedByName: null,
+  }));
 }
 function seedDocuments(rows: Omit<Doc, "uploadedByUserId" | "uploadedByName">[]): Doc[] {
   return rows.map((d) => ({ ...d, uploadedByUserId: null, uploadedByName: null }));
@@ -779,6 +794,10 @@ function normalizeLoaded() {
     for (const k of ["createdByUserId", "createdByName", "completedAt", "completedByUserId", "completedByName"]) {
       if (row[k] === undefined) row[k] = null;
     }
+    // Freeze the earliest title we know, so later edits cannot rewrite the
+    // task's "created" history. (Only an API call can edit a title; no screen
+    // ever has.)
+    if (typeof row.createdTitle !== "string") row.createdTitle = t.title;
   }
   for (const d of store.documents) {
     const row = d as Partial<Doc> & Doc;

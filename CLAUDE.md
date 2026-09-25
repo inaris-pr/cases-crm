@@ -37,7 +37,7 @@ Run from `cases-app/`. Requires Node ≥20 and pnpm 9.0.0 (`corepack prepare pnp
 | `pnpm dev:api` | API only |
 | `pnpm dev:web` | Frontend only (proxies /api to :3001) |
 | `pnpm typecheck` | tsc --noEmit across the workspace (API src + tests, web, lib/db, lib/access) — **must stay clean** |
-| `pnpm test` | Vitest + Supertest suite (48 files, 638 tests) — **must stay green** |
+| `pnpm test` | Vitest + Supertest suite (48 files, 644 tests) — **must stay green** |
 | `pnpm test:e2e` | Playwright RBAC, dashboard and case-lifecycle browser suite (e2e/, 53 tests; own API + Vite on 3101/5174, temp data) |
 | `pnpm build` | esbuild bundle for the API, `tsc -b && vite build` for the web |
 | `pnpm api:generate` | Orval regen from the OpenAPI spec — **do not run**; the spec is stale |
@@ -162,7 +162,9 @@ it, debounced, after every successful non-GET request.
   whenever one exists; only changes with no record of their own go into
   the append-only `caseActivities` via `recordCaseActivity` (real changes
   only, actor = session). Never create fake human comments, never parse
-  mentions in system entries, and never emit `automation_execution` until
+  mentions in system entries, never show a mutable current value in a
+  historical entry (snapshot it, like `Task.createdTitle`), and never emit
+  `automation_execution` until
   a real engine runs automations. Phone calls stay aggregated (one card per
   direction). Details: CLAUDE_HANDOFF.md §2 "Case Thread".
 - **`lib/access` is the single source of access rules** (Phase 2): role keys,
@@ -215,7 +217,7 @@ it, debounced, after every successful non-GET request.
 ## Tests
 
 `pnpm test` from the root, or `pnpm --filter @cases/api-server test`.
-Vitest + Supertest, in `artifacts/api-server/test/` — 48 files, 638 tests.
+Vitest + Supertest, in `artifacts/api-server/test/` — 48 files, 644 tests.
 
 - **Every request needs a session.** `test/helpers/app.ts` logs in through the
   real endpoint: `asMe` is Iris's session cookie, `loginAs(email)` returns

@@ -1685,6 +1685,7 @@ export function buildApiRouter(): Router {
         createdAt: now,
         createdByUserId: me.id,
         createdByName: me.name,
+        createdTitle: body.title,
         completedAt: completed ? now : null,
         completedByUserId: completed ? me.id : null,
         completedByName: completed ? me.name : null,

@@ -22,13 +22,16 @@ const V2 = {
     { id: 2, caseNumber: "CASE-002", title: "Closed long ago", accountId: 1, primaryContactId: null, status: "completed", priority: "low",
       description: null, tags: [], ownerName: "Iris Burgos", ownerUserId: 1, createdAt: T0, updatedAt: "2026-02-01T00:00:00.000Z" },
   ],
-  tasks: [], documents: [], conversations: [], messages: [], caseInteractions: [], threadEntries: [], mentions: [], automations: [],
+  tasks: [
+    { id: 1, caseId: 1, title: "Old task", description: null, status: "pending", dueDate: null, createdAt: T0 },
+  ],
+  documents: [], conversations: [], messages: [], caseInteractions: [], threadEntries: [], mentions: [], automations: [],
   users: [
     { id: 1, name: "Iris Burgos", email: "iris@example.com", passwordHash: hashPasswordSync("test123"), roles: ["system_owner"],
       departmentKey: null, active: true, demo: true, mustChangePassword: false, lastLoginAt: null, createdAt: T0 },
   ],
   teams: [], sessions: [],
-  seq: { account: 1, contact: 0, accountContactLink: 0, lead: 0, case: 2, caseNumber: 2, task: 0, document: 0,
+  seq: { account: 1, contact: 0, accountContactLink: 0, lead: 0, case: 2, caseNumber: 2, task: 1, document: 0,
     conversation: 0, message: 0, caseInteraction: 0, threadEntry: 0, mention: 0, user: 1, team: 0, session: 0, automation: 0 },
 };
 
@@ -57,6 +60,8 @@ describe("loading a pre-Phase-7 store", () => {
         .toEqual({ category: null, closedAt: null, closedByUserId: null, closedByName: null });
     }
     expect(store.caseStatusEvents).toEqual([]);
+    // An older task: no creator recorded; its title as first recorded is frozen.
+    expect(store.tasks[0]).toMatchObject({ title: "Old task", createdTitle: "Old task", createdByUserId: null, completedAt: null });
     expect(store.caseEscalations).toEqual([]);
 
     // The API reads the old Case as uncategorized with no closing time.
@@ -67,6 +72,11 @@ describe("loading a pre-Phase-7 store", () => {
     expect(legacy.status).toBe(200);
     expect(legacy.body).toMatchObject({ category: null, closedAt: null, resolution: null, statusHistory: [], escalations: [] });
 
+    // Renaming that task later does not rewrite its "Task created" entry.
+    expect((await iris.patch("/tasks/1", { title: "Renamed task" })).status).toBe(200);
+    const created = (await iris.get("/cases/1/feed")).body.entries.find((e: { type: string }) => e.type === "task_created");
+    expect(created).toMatchObject({ title: "Old task", titleSource: "first_recorded", actor: null });
+
     // The first ordinary write works and records history with fresh ids.
     const res = await iris.patch("/cases/1", { status: "completed" });
     expect(res.status).toBe(200);
@@ -75,6 +85,7 @@ describe("loading a pre-Phase-7 store", () => {
     const saved = JSON.parse(fs.readFileSync(storeFile, "utf-8"));
     expect(saved.meta).toEqual({ schemaVersion: 2 });
     expect(saved.caseStatusEvents).toHaveLength(1);
+    expect(saved.tasks[0]).toMatchObject({ title: "Renamed task", createdTitle: "Old task" });
     // The next ordinary save writes the new fields as null — the legacy
     // closed Case still has no closing time (not its updatedAt).
     expect(saved.cases[1]).toMatchObject({ status: "completed", closedAt: null, category: null, updatedAt: "2026-02-01T00:00:00.000Z" });

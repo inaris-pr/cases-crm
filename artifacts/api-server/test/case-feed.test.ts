@@ -161,7 +161,8 @@ describe("tasks and documents", () => {
     await who.devon.patch(`/tasks/${task.id}`, { title: "Renamed task" }); // not an event
     const entries = await feed(who.devon, id);
     expect(entries.map((e) => e.type)).toEqual(["task_created", "task_completed", "task_reopened", "task_completed"]);
-    expect(entries[0]).toMatchObject({ title: "Renamed task", actor: { name: "Devon Park" } }); // current title
+    // History does not follow the later rename: the title as created.
+    expect(entries[0]).toMatchObject({ title: "Prepare amendment filing", titleSource: "creation", actor: { name: "Devon Park" } });
     expect(entries[1]).toMatchObject({ title: "Prepare amendment filing", actor: { name: "Nadia Flores" } }); // title as completed
     expect(entries[2]).toMatchObject({ toStatus: "in_progress", actor: { name: "Devon Park" } });
   });
@@ -199,6 +200,91 @@ describe("tasks and documents", () => {
     expect(store.documents.find((d) => d.id === good.id)!.fileUrl).toBe(docs[0].href);
     expect(docs[1].href).toBeNull();
     expect(docs[2].href).toBeNull();
+  });
+});
+
+describe("historical entries do not change retroactively", () => {
+  it("Task created keeps the title it was created with, whatever edits follow", async () => {
+    const id = await newCase(who.devon);
+    const task = (await who.devon.post("/tasks", { caseId: id, title: "Original title" })).body;
+    expect(task.createdTitle).toBe("Original title");
+    const before = ofType(await feed(who.devon, id), "task_created")[0];
+    const edited = await who.devon.patch(`/tasks/${task.id}`, { title: "Edited title", description: "x", createdTitle: "Hacked" });
+    expect(edited.status).toBe(200);
+    expect(edited.body).toMatchObject({ title: "Edited title", createdTitle: "Original title" }); // not writable
+    expect(ofType(await feed(who.devon, id), "task_created")[0]).toEqual(before);
+  });
+
+  it("an older task keeps the title as first recorded, and says so", async () => {
+    const legacy = store.tasks.find((t) => t.caseId === 1 && t.createdByName === null)!;
+    const original = legacy.title;
+    const before = (await feed(who.iris, 1)).find((e) => e.key === `task:${legacy.id}:created`)!;
+    expect(before).toMatchObject({ title: original, titleSource: "first_recorded", actor: null });
+    await who.iris.patch(`/tasks/${legacy.id}`, { title: `${original} (renamed)` });
+    expect((await feed(who.iris, 1)).find((e) => e.key === `task:${legacy.id}:created`)).toEqual(before);
+  });
+
+  it("actor names are the labels recorded at the time, not current names", async () => {
+    const id = await newCase(who.devon);
+    await who.devon.post("/tasks", { caseId: id, title: "T" });
+    await who.devon.post("/documents", { caseId: id, filename: "d.pdf", fileUrl: "https://example.com/d.pdf" });
+    await who.devon.post(`/cases/${id}/thread`, { body: "note" });
+    await who.devon.post(`/cases/${id}/escalations`, { reason: "other" });
+    await who.devon.patch(`/cases/${id}`, { status: "completed", priority: "high" });
+    const before = await feed(who.devon, id);
+    const devon = store.users.find((u) => u.id === uid("Devon Park"))!;
+    devon.name = "Devon Renamed";
+    try {
+      expect(await feed(who.devon, id)).toEqual(before);
+    } finally {
+      devon.name = "Devon Park";
+    }
+  });
+
+  it("no route edits or deletes the records historical entries come from", async () => {
+    const { buildApiRouter } = await import("../src/routes");
+    const router = buildApiRouter() as unknown as { stack: { route?: { path: string; methods: Record<string, boolean> } }[] };
+    const writes = router.stack
+      .filter((l) => l.route)
+      .flatMap((l) => Object.keys(l.route!.methods).filter((m) => m !== "get" && m !== "_all").map((m) => `${m.toUpperCase()} ${l.route!.path}`));
+    // Documents, comments, call logs: create only. Escalations: create and a one-time resolve.
+    expect(writes.filter((w) => /\/documents|\/thread|\/cases\/:id\/contacts|escalations/.test(w)).sort()).toEqual([
+      "POST /cases/:id/contacts",
+      "POST /cases/:id/escalations",
+      "POST /cases/:id/escalations/:escalationId/resolve",
+      "POST /cases/:id/thread",
+      "POST /documents",
+    ]);
+    // Status history and recorded activities have no write routes of their own at all.
+    expect(writes.filter((w) => /status|activit|feed|history/i.test(w))).toEqual([]);
+    // Tasks can be edited — which is why "Task created" uses the creation snapshot.
+    expect(writes).toContain("PATCH /tasks/:id");
+  });
+
+  it("the document entry shows the upload-time name and link (documents cannot be edited)", async () => {
+    const id = await newCase(who.devon);
+    const doc = (await who.devon.post("/documents", { caseId: id, filename: "Upload.pdf", fileUrl: "https://example.com/upload.pdf" })).body;
+    for (const method of ["patch", "put", "delete"] as const) {
+      const res = await request(app)[method](`/api/documents/${doc.id}`).set(await loginAs("iris@example.com")).send({ filename: "Changed.pdf" });
+      expect(res.status).toBe(404);
+    }
+    expect(ofType(await feed(who.devon, id), "document_uploaded")[0]).toMatchObject({
+      documentId: doc.id, filename: "Upload.pdf", href: "https://example.com/upload.pdf",
+    });
+  });
+
+  it("call cards are intentionally live: they follow the call log", async () => {
+    const id = await newCase(who.devon);
+    const call = (n: string) => who.devon.post(`/cases/${id}/contacts`, { direction: "outbound", channel: "phone", summary: n, contact: "Client" });
+    await call("one");
+    const first = ofType(await feed(who.devon, id), "calls_outgoing_summary")[0];
+    await tick();
+    await call("two");
+    const second = ofType(await feed(who.devon, id), "calls_outgoing_summary")[0];
+    expect(second.key).toBe(first.key); // the same single card…
+    expect([first.count, second.count]).toEqual([1, 2]); // …recomputed
+    expect(second.latest.summary).toBe("two");
+    expect(Date.parse(second.at)).toBeGreaterThan(Date.parse(first.at));
   });
 });
 

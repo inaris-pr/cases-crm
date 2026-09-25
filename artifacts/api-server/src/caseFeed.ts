@@ -8,7 +8,8 @@
  *   comment                   store.threadEntries (human comments, unchanged)
  *   status_change             store.caseStatusEvents (Phase 7 lifecycle)
  *   escalation_created/_resolved  store.caseEscalations (Phase 7)
- *   task_created              store.tasks (createdAt, createdBy*)
+ *   task_created              store.tasks (createdAt, createdBy*, createdTitle
+ *                               — the creation snapshot, not the editable title)
  *   document_uploaded         store.documents (createdAt, uploadedBy*)
  *   calls_outgoing_summary /  store.caseInteractions, channel "phone",
  *   calls_incoming_summary      one aggregated entry per direction
@@ -78,7 +79,13 @@ export type FeedEntry =
   | Entry<"primary_contact_change", { fromContactId: number | null; fromName: string | null; toContactId: number | null; toName: string | null }>
   | Entry<"escalation_created", { escalationId: number; reason: EscalationReason; note: string | null }>
   | Entry<"escalation_resolved", { escalationId: number; reason: EscalationReason }>
-  | Entry<"task_created", { taskId: number; title: string }>
+  | Entry<"task_created", {
+      taskId: number;
+      /** The title when the task was created — never the current title. */
+      title: string;
+      /** "creation": captured at creation; "first_recorded": an older task, the title as first recorded. */
+      titleSource: "creation" | "first_recorded";
+    }>
   | Entry<"task_completed", { taskId: number; title: string }>
   | Entry<"task_reopened", { taskId: number; title: string; toStatus: TaskStatus }>
   | Entry<"document_uploaded", { documentId: number; filename: string; href: string | null }>
@@ -194,7 +201,9 @@ export function buildCaseFeed(caseId: number, s: Store = store): FeedEntry[] {
       at: t.createdAt,
       actor: actor(t.createdByUserId ?? null, t.createdByName ?? null),
       taskId: t.id,
-      title: t.title,
+      // Immutable: the creation snapshot, not the current (editable) title.
+      title: t.createdTitle,
+      titleSource: t.createdByName !== null ? "creation" : "first_recorded",
     });
   }
 

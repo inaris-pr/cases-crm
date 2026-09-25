@@ -316,6 +316,8 @@ export interface Task {
   /** Thread follow-up: null when not recorded (older tasks). */
   createdByUserId?: number | null;
   createdByName?: string | null;
+  /** The title when the task was created (the Thread shows this). */
+  createdTitle?: string;
   completedAt?: string | null;
   completedByUserId?: number | null;
   completedByName?: string | null;
@@ -707,7 +709,7 @@ export type FeedEntry =
   | FeedEntryOf<"primary_contact_change", { fromContactId: number | null; fromName: string | null; toContactId: number | null; toName: string | null }>
   | FeedEntryOf<"escalation_created", { escalationId: number; reason: EscalationReason; note: string | null }>
   | FeedEntryOf<"escalation_resolved", { escalationId: number; reason: EscalationReason }>
-  | FeedEntryOf<"task_created", { taskId: number; title: string }>
+  | FeedEntryOf<"task_created", { taskId: number; title: string; titleSource: "creation" | "first_recorded" }>
   | FeedEntryOf<"task_completed", { taskId: number; title: string }>
   | FeedEntryOf<"task_reopened", { taskId: number; title: string; toStatus: TaskStatus }>
   | FeedEntryOf<"document_uploaded", { documentId: number; filename: string; href: string | null }>

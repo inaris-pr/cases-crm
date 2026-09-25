@@ -11,7 +11,7 @@ permission core**, **RBAC Phase 3 — backend enforcement** and **RBAC Phase 4 �
 stable ownership ids and real team scope** and **RBAC Phase 5 — role-aware
 frontend** and **RBAC Phase 6 — personalized role dashboards** and **Phase 7 —
 case lifecycle, categories & escalations** (with the unified Case Thread
-follow-up). Typecheck clean; **638 tests across 48 files**, all passing;
+follow-up). Typecheck clean; **644 tests across 48 files**, all passing;
 Playwright 53 tests. Default branch `main`, pushed to the private
 remote `inaris-pr/cases-crm`.
 
@@ -426,7 +426,7 @@ comments only; posting comments (and @-mentions) is unchanged.
 | `status_change` (`kind`: status_change / closed / reopened) | `caseStatusEvents` (Phase 7 lifecycle — the same events as the history card) |
 | `category_change`, `priority_change`, `owner_change`, `account_change`, `primary_contact_change`, `task_completed`, `task_reopened` | **persisted** `caseActivities`, appended when the change happens (`recordCaseActivity`) — only on a real change, never on a no-op |
 | `escalation_created`, `escalation_resolved` | `caseEscalations` |
-| `task_created` | `tasks` (`createdAt`, `createdByUserId/Name`) |
+| `task_created` | `tasks` (`createdAt`, `createdByUserId/Name`, `createdTitle` — the title at creation; titles are editable via `PATCH /tasks/:id`, so the entry never uses the current title. Tasks older than this field keep the title as first loaded after the upgrade, frozen, and the entry says "title as first recorded") |
 | `document_uploaded` | `documents` (`createdAt`, `uploadedByUserId/Name`); `href` only for an http(s) `fileUrl` (the Documents tab's link), else no link |
 | `calls_outgoing_summary`, `calls_incoming_summary` | `caseInteractions` with channel `phone`, ONE entry per direction: `count`, `latest` (who, when, contact, summary), up to 3 `previous`; placed at the latest call, recomputed on every read — no stored counter |
 | `contact_logged` | `caseInteractions` with other channels (email, SMS, meeting, other) — one compact entry each |
@@ -435,6 +435,12 @@ comments only; posting comments (and @-mentions) is unchanged.
 - **Actors**: always the session's employee (id + name label as of the
   event); body-supplied names/ids are ignored. Historical labels are never
   rewritten.
+- **Immutability**: every non-aggregated entry reads only values that cannot
+  change after the event — comments, call logs and documents have no
+  edit/delete routes; status events and `caseActivities` have no write routes
+  at all; escalations only gain their one-time resolution; tasks are
+  editable, hence `createdTitle`. Only the two call cards are intentionally
+  live (recomputed from the call log). `test/case-feed.test.ts` pins this.
 - **Not recorded** (never guessed): creators of tasks and uploaders of
   documents added before this change ("Creator/Uploader not recorded"), and
   completion of tasks completed before it (no entry). Title, description
@@ -673,7 +679,7 @@ alias for `accountId`.
 
 ### Test coverage
 
-`pnpm test`: Vitest + Supertest, **48 files / 638 tests** in
+`pnpm test`: Vitest + Supertest, **48 files / 644 tests** in
 `artifacts/api-server/test/`. Covers stable ownership (v2 migration,
 refusal on unmapped/ambiguous names, rename safety, spoofing, history),
 team scope and reassignment, authorization (every route declared,
