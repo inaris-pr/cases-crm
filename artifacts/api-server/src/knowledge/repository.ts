@@ -16,8 +16,11 @@
 import { createHash } from "node:crypto";
 import { LLC_PILOT_ARTICLES } from "./content/llcPilot.js";
 import { LLC_SOURCE } from "./content/llcSource.js";
+import { LLC_SHARED_SERVICES, LLC_SOURCE_DISCREPANCIES } from "./content/llcShared.js";
+import { evidenceCitation, resolveServiceAvailability, type ServiceAvailability } from "./availability.js";
 import {
   SERVICE_CATALOG,
+  SERVICE_KEYS,
   sectionCitation,
   sectionId,
   type ClientDisclosureLevel,
@@ -28,15 +31,23 @@ import {
   type KnowledgeArticleType,
   type KnowledgeAudience,
   type KnowledgeEntityType,
+  type KnowledgeSharedService,
   type KnowledgeSource,
+  type KnowledgeSourceDiscrepancy,
   type KnowledgeTopic,
+  type SharedEvidence,
   type SectionKind,
   type SectionVerification,
   type ServiceKey,
   type ServiceProfile,
   type SourceFlag,
 } from "./model.js";
-import { validateKnowledgeContent, type ValidateOptions } from "./validate.js";
+import {
+  KnowledgeValidationError,
+  sharedContentProblems,
+  validateKnowledgeContent,
+  type ValidateOptions,
+} from "./validate.js";
 
 // ── Records served by the repository ─────────────────────────────────────────
 
@@ -90,14 +101,56 @@ export interface KnowledgeArticle {
   aliases: string[];
   serviceProfile: ServiceProfile;
   sections: KnowledgeSection[];
-  /** Union of the sections' topics / services, in first-seen order. */
+  /**
+   * DIRECT metadata: union of the sections' topics / services — what this
+   * jurisdiction's entry itself prints. (Kept under these names for
+   * compatibility; `directTopics` / `directServiceKeys` are the same lists.)
+   */
   topics: KnowledgeTopic[];
   serviceKeys: ServiceKey[];
+  directTopics: KnowledgeTopic[];
+  directServiceKeys: ServiceKey[];
+  /**
+   * INHERITED metadata: services the entry does not print but an
+   * uncontested national source rule makes available, and their topics.
+   * Never text of this article.
+   */
+  inheritedServiceKeys: ServiceKey[];
+  inheritedTopics: KnowledgeTopic[];
+  /**
+   * EFFECTIVE metadata for filtering/retrieval: services whose status is
+   * `direct` or `inherited` (a disputed, restricted or not-offered service is
+   * never effective, even if printed), and direct ∪ inherited topics.
+   */
+  effectiveServiceKeys: ServiceKey[];
+  effectiveTopics: KnowledgeTopic[];
+  /** Services whose availability here is contested by the source. */
+  disputedServiceKeys: ServiceKey[];
+  /** One entry per catalog service, each with its status, reason and citation path. */
+  serviceAvailability: ServiceAvailability[];
   flagSummary: KnowledgeFlagSummary;
+}
+
+/** A shared-service record with human-readable citations for its evidence. */
+export interface CitedEvidence extends SharedEvidence {
+  citation: string;
+}
+export interface CitedSharedService extends Omit<KnowledgeSharedService, "evidence" | "caveats"> {
+  label: string;
+  evidence: CitedEvidence[];
+  caveats: CitedEvidence[];
+  discrepancyIds: string[];
+}
+export interface CitedDiscrepancy extends Omit<KnowledgeSourceDiscrepancy, "claims"> {
+  claims: CitedEvidence[];
 }
 
 export interface KnowledgeRepository {
   sources: readonly KnowledgeSource[];
+  /** Explicit shared (national / multi-jurisdiction) service rules, with citations. */
+  sharedServices: readonly CitedSharedService[];
+  /** Unresolved source contradictions, with citations. */
+  discrepancies: readonly CitedDiscrepancy[];
   /** Every article, any status. Readers must go through `readable()`. */
   all: readonly KnowledgeArticle[];
   byIdOrSlug(idOrSlug: string): KnowledgeArticle | null;
@@ -118,7 +171,11 @@ function deepFreeze<T>(v: T): T {
   return v;
 }
 
-function buildArticle(a: KnowledgeArticleInput): KnowledgeArticle {
+function buildArticle(
+  a: KnowledgeArticleInput,
+  shared: readonly KnowledgeSharedService[],
+  discrepancies: readonly KnowledgeSourceDiscrepancy[],
+): KnowledgeArticle {
   const sections: KnowledgeSection[] = a.sections.map((s) => ({
     id: sectionId(a.id, s.key),
     key: s.key,
@@ -139,6 +196,19 @@ function buildArticle(a: KnowledgeArticleInput): KnowledgeArticle {
     contentHash: createHash("sha256").update(`${s.label}\n${s.content}`).digest("hex"),
   }));
   const count = (f: SourceFlag) => sections.filter((s) => s.flag === f).length;
+  const directServiceKeys = unique(sections.flatMap((s) => s.serviceKeys));
+  const directTopics = unique(sections.flatMap((s) => s.topics));
+  const directSections = new Map<string, string[]>();
+  for (const s of sections) for (const k of s.serviceKeys) directSections.set(k, [...(directSections.get(k) ?? []), s.id]);
+  const ctx = { entityType: a.entityType, jurisdictionCode: a.jurisdictionCode, directSections, shared, discrepancies };
+  const serviceAvailability = SERVICE_KEYS.map((k) => resolveServiceAvailability(ctx, k));
+  const withStatus = (st: string) => serviceAvailability.filter((x) => x.status === st).map((x) => x.serviceKey);
+  const inheritedServiceKeys = withStatus("inherited");
+  const inheritedTopics = unique(
+    inheritedServiceKeys.flatMap((k) =>
+      shared.filter((r) => r.serviceKey === k && r.scope === "national" && r.availability === "offered").flatMap((r) => r.topics),
+    ),
+  ).filter((t) => !directTopics.includes(t));
   return {
     id: a.id,
     slug: a.slug,
@@ -158,8 +228,16 @@ function buildArticle(a: KnowledgeArticleInput): KnowledgeArticle {
     aliases: [...a.aliases],
     serviceProfile: structuredClone(a.serviceProfile),
     sections,
-    topics: unique(sections.flatMap((s) => s.topics)),
-    serviceKeys: unique(sections.flatMap((s) => s.serviceKeys)),
+    topics: directTopics,
+    serviceKeys: directServiceKeys,
+    directTopics: [...directTopics],
+    directServiceKeys: [...directServiceKeys],
+    inheritedServiceKeys,
+    inheritedTopics,
+    effectiveServiceKeys: [...withStatus("direct"), ...inheritedServiceKeys],
+    effectiveTopics: [...directTopics, ...inheritedTopics],
+    disputedServiceKeys: withStatus("disputed"),
+    serviceAvailability,
     flagSummary: {
       stateRequirements: count("state_requirement"),
       clientDisclosures: count("client_disclosure"),
@@ -174,14 +252,38 @@ function buildArticle(a: KnowledgeArticleInput): KnowledgeArticle {
  * Validate and build a repository. Throws KnowledgeValidationError (listing
  * every problem) instead of serving content that does not match its rules.
  */
+export interface BuildOptions extends ValidateOptions {
+  /** Explicit shared service rules (default: none). */
+  shared?: readonly KnowledgeSharedService[];
+  /** Recorded source contradictions (default: none). */
+  discrepancies?: readonly KnowledgeSourceDiscrepancy[];
+}
+
 export function buildKnowledgeRepository(
   articles: readonly KnowledgeArticleInput[],
   sources: readonly KnowledgeSource[],
-  opts: ValidateOptions = {},
+  opts: BuildOptions = {},
 ): KnowledgeRepository {
   validateKnowledgeContent(articles, sources, opts);
-  const all = deepFreeze(articles.map(buildArticle));
+  const shared = opts.shared ?? [];
+  const discrepancies = opts.discrepancies ?? [];
+  const sharedProblems = sharedContentProblems(shared, discrepancies, articles, sources);
+  if (sharedProblems.length) throw new KnowledgeValidationError(sharedProblems);
+  const all = deepFreeze(articles.map((a) => buildArticle(a, shared, discrepancies)));
   const frozenSources = deepFreeze(sources.map((s) => structuredClone(s)));
+  const titleOf = (id: string) => all.find((a) => a.id === id)?.title ?? null;
+  const labelOf = (id: string, key: string) => all.find((a) => a.id === id)?.sections.find((s) => s.key === key)?.label ?? null;
+  const cite = (e: SharedEvidence): CitedEvidence => ({ ...structuredClone(e), citation: evidenceCitation(e, frozenSources, titleOf, labelOf) });
+  const citedShared = deepFreeze(
+    shared.map((r) => ({
+      ...structuredClone(r),
+      label: SERVICE_CATALOG[r.serviceKey].label,
+      evidence: r.evidence.map(cite),
+      caveats: r.caveats.map(cite),
+      discrepancyIds: discrepancies.filter((d) => (d.serviceKeys as string[]).includes(r.serviceKey)).map((d) => d.id),
+    })),
+  );
+  const citedDiscrepancies = deepFreeze(discrepancies.map((d) => ({ ...structuredClone(d), claims: d.claims.map(cite) })));
   const index = new Map<string, KnowledgeArticle>();
   for (const a of all) {
     index.set(a.id, a);
@@ -189,6 +291,8 @@ export function buildKnowledgeRepository(
   }
   return {
     sources: frozenSources,
+    sharedServices: citedShared,
+    discrepancies: citedDiscrepancies,
     all,
     byIdOrSlug: (key) => index.get(key.trim().toLowerCase()) ?? null,
     source: (id) => frozenSources.find((s) => s.id === id) ?? null,
@@ -196,7 +300,20 @@ export function buildKnowledgeRepository(
 }
 
 /** The Knowledge Base. Phase 8: the five LLC pilot articles. */
-export const knowledgeBase: KnowledgeRepository = buildKnowledgeRepository(LLC_PILOT_ARTICLES, [LLC_SOURCE]);
+export const knowledgeBase: KnowledgeRepository = buildKnowledgeRepository(LLC_PILOT_ARTICLES, [LLC_SOURCE], {
+  shared: LLC_SHARED_SERVICES,
+  discrepancies: LLC_SOURCE_DISCREPANCIES,
+});
+
+/** The shared records and discrepancies bearing on one article (for its detail response). */
+export function sharedContextFor(article: KnowledgeArticle, repo: KnowledgeRepository = knowledgeBase) {
+  const sharedIds = new Set(article.serviceAvailability.flatMap((x) => x.sharedServiceIds));
+  const discrepancyIds = new Set(article.serviceAvailability.flatMap((x) => x.discrepancyIds));
+  return {
+    sharedServices: repo.sharedServices.filter((r) => sharedIds.has(r.id)),
+    sourceDiscrepancies: repo.discrepancies.filter((d) => discrepancyIds.has(d.id)),
+  };
+}
 
 // ── Reading ──────────────────────────────────────────────────────────────────
 
@@ -213,6 +330,12 @@ export interface KnowledgeFilters {
   jurisdiction?: JurisdictionCode;
   status?: KnowledgeArticleStatus;
   topic?: KnowledgeTopic;
+  service?: ServiceKey;
+  /**
+   * Which metadata `topic` / `service` (and `q`) match: "effective" (default:
+   * direct + inherited) or "direct" (only what the entry prints).
+   */
+  metadata?: "effective" | "direct";
   flag?: SourceFlag;
   q?: string;
 }
@@ -238,6 +361,16 @@ export interface KnowledgeMatch {
   article: KnowledgeArticle;
   /** Sections matching `q` (every section when there is no `q`). */
   sectionIds: string[];
+  /** Inherited services matching `q` — never presented as article text. */
+  inheritedServiceKeys: ServiceKey[];
+}
+
+/** What an inherited service is searched by: its catalog label, topics and the source terms naming it. */
+function inheritedSearchText(a: KnowledgeArticle, key: ServiceKey, repo: KnowledgeRepository): string {
+  const rules = repo.sharedServices.filter((r) => r.serviceKey === key && r.scope === "national" && r.availability === "offered");
+  return [a.title, a.jurisdictionName, a.jurisdictionCode, ...a.aliases, SERVICE_CATALOG[key].label, ...rules.flatMap((r) => [...r.topics, ...r.evidence.map((e) => e.term)])]
+    .join(" ")
+    .toLowerCase();
 }
 
 /**
@@ -246,21 +379,23 @@ export interface KnowledgeMatch {
  */
 export function findArticles(filters: KnowledgeFilters, repo: KnowledgeRepository = knowledgeBase): KnowledgeMatch[] {
   const terms = filters.q ? queryTerms(filters.q) : [];
+  const directOnly = filters.metadata === "direct";
   const out: KnowledgeMatch[] = [];
   for (const a of readable(repo)) {
     if (filters.entityType && a.entityType !== filters.entityType) continue;
     if (filters.jurisdiction && a.jurisdictionCode !== filters.jurisdiction) continue;
     if (filters.status && a.status !== filters.status) continue;
-    if (filters.topic && !a.topics.includes(filters.topic)) continue;
+    if (filters.topic && !(directOnly ? a.directTopics : a.effectiveTopics).includes(filters.topic)) continue;
+    if (filters.service && !(directOnly ? a.directServiceKeys : a.effectiveServiceKeys).includes(filters.service)) continue;
     if (filters.flag && !a.sections.some((s) => s.flag === filters.flag)) continue;
+    const matches = (text: string) => terms.every((t) => text.includes(t));
     const sectionIds = terms.length
-      ? a.sections.filter((s) => {
-          const text = sectionSearchText(a, s);
-          return terms.every((t) => text.includes(t));
-        }).map((s) => s.id)
+      ? a.sections.filter((s) => matches(sectionSearchText(a, s))).map((s) => s.id)
       : a.sections.map((s) => s.id);
-    if (terms.length && !sectionIds.length) continue;
-    out.push({ article: a, sectionIds });
+    const inheritedServiceKeys =
+      terms.length && !directOnly ? a.inheritedServiceKeys.filter((k) => matches(inheritedSearchText(a, k, repo))) : [];
+    if (terms.length && !sectionIds.length && !inheritedServiceKeys.length) continue;
+    out.push({ article: a, sectionIds, inheritedServiceKeys });
   }
   return out.sort((x, y) => x.article.title.localeCompare(y.article.title));
 }

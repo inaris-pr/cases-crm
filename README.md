@@ -41,8 +41,11 @@ practice — leads, companies, the people behind them, and the matters in flight
   (Arizona, California, Delaware, Florida, Wyoming), readable through
   `GET /api/knowledge/articles` by employees with Knowledge Base access.
   Internal-only, not counsel-reviewed; open research items stay marked as
-  unresolved. No Knowledge Base page, Case recommendations or AI assistant
-  yet.
+  unresolved. Each article also says, per service, whether it is stated in
+  that state's entry, inherited from an explicit national statement in the
+  source, not offered, restricted, disputed by the source, or unknown — a
+  service a state entry doesn't mention is never treated as unavailable.
+  No Knowledge Base page, Case recommendations or AI assistant yet.
 - **Roles and permissions** — every employee sees and can do only what their
   role allows (own / team / company scope), enforced by the API and mirrored
   in the UI.
@@ -124,7 +127,7 @@ Partner roles are reserved and have no access yet.
 | `pnpm dev:api` | API only |
 | `pnpm dev:web` | Frontend only |
 | `pnpm typecheck` | TypeScript across the workspace — currently clean |
-| `pnpm test` | Test suite (Vitest + Supertest) — 730 tests in 52 files |
+| `pnpm test` | Test suite (Vitest + Supertest) — 761 tests in 53 files |
 | `pnpm test:e2e` | Playwright RBAC, dashboard and case-lifecycle browser suite (e2e/) — 54 tests |
 | `pnpm build` | Production builds for everything |
 | `pnpm api:generate` | Orval regen — **don't**, the spec it reads is stale |

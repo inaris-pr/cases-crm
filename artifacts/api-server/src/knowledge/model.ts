@@ -328,6 +328,8 @@ export const TOPIC_EVIDENCE = {
   business_insurance: /insurance/i,
   business_financing: /financing/i,
   boi_compliance: /Corporate Transparency Act|\bBOI\b/,
+  trademark: /trademark/i,
+  tax_preparation: /tax preparation|tax filing/i,
 } as const satisfies Record<string, RegExp>;
 export type KnowledgeTopic = keyof typeof TOPIC_EVIDENCE;
 export const KNOWLEDGE_TOPICS = Object.keys(TOPIC_EVIDENCE) as KnowledgeTopic[];
@@ -387,6 +389,13 @@ export const SERVICE_CATALOG = {
   business_insurance: { label: "Business insurance", evidence: /business insurance/ },
   business_financing_referral: { label: "Business financing referral", evidence: /business financing referral/ },
   boi_compliance: { label: "Corporate Transparency Act / BOI compliance", evidence: /Corporate Transparency Act \/ BOI compliance/ },
+  // Named by the source only as services it does NOT provide (Scope and caveats, p. 3).
+  trademark_registration: { label: "Trademark registration", evidence: /Trademark registration/ },
+  business_license_services: {
+    label: "Standalone business license research, application, or renewal",
+    evidence: /business license research, application, or renewal/,
+  },
+  tax_preparation_filing: { label: "Tax preparation and tax filing", evidence: /Tax preparation and tax filing/ },
 } as const satisfies Record<string, { label: string; evidence: RegExp }>;
 export type ServiceKey = keyof typeof SERVICE_CATALOG;
 export const SERVICE_KEYS = Object.keys(SERVICE_CATALOG) as ServiceKey[];
@@ -497,3 +506,121 @@ export interface KnowledgeSource {
   /** The source's own framing, verbatim, with the page it is printed on. */
   notices: { key: string; label: string; text: string; page: number }[];
 }
+
+// ── Shared (national) services and source discrepancies ──────────────────────
+
+/**
+ * Where a shared-service quote is printed: one of the source's own notices
+ * (front matter), or one section of a loaded article.
+ */
+export type SharedEvidenceLocation =
+  | { kind: "source_notice"; noticeKey: string }
+  | { kind: "article_section"; articleId: string; sectionKey: string };
+
+/**
+ * One verbatim passage that supports a shared-service record or a side of a
+ * discrepancy. `term` is the exact words inside `quote` that name the
+ * service ("banking", "the governance document library").
+ */
+export interface SharedEvidence {
+  sourceId: string;
+  location: SharedEvidenceLocation;
+  quote: string;
+  term: string;
+}
+
+/**
+ * What a shared-service record says about a service across jurisdictions.
+ *   offered          — available in every jurisdiction (scope "national")
+ *   not_offered      — not a product (national) / not sold in the listed
+ *                      jurisdictions (scope "jurisdictions")
+ *   varies_by_state  — the source says it varies by state: there is NO
+ *                      national default; only a state entry can say
+ *   exclusive        — offered ONLY in the listed jurisdictions
+ */
+export const SHARED_AVAILABILITY = ["offered", "not_offered", "varies_by_state", "exclusive"] as const;
+export type SharedAvailability = (typeof SHARED_AVAILABILITY)[number];
+
+export const SHARED_SCOPES = ["national", "jurisdictions"] as const;
+export type SharedScope = (typeof SHARED_SCOPES)[number];
+
+/**
+ * A service rule the source states for more than one entry — never inferred
+ * from a service merely appearing in several states. Every record carries
+ * the verbatim passage(s) it rests on.
+ */
+export interface KnowledgeSharedService {
+  /** Stable id, e.g. "llc-shared:instant_bank_account:national-offered". */
+  id: string;
+  entityType: KnowledgeEntityType;
+  serviceKey: ServiceKey;
+  scope: SharedScope;
+  /** Scope "jurisdictions" only; null for national records. */
+  jurisdictions: JurisdictionCode[] | null;
+  availability: SharedAvailability;
+  /** Offered everywhere, but the terms (fulfillment, tiers…) are set per state. */
+  termsVaryByState: boolean;
+  topics: KnowledgeTopic[];
+  /** At least one verbatim passage. */
+  evidence: SharedEvidence[];
+  /** Verbatim qualifications that travel with the service wherever it applies. */
+  caveats: SharedEvidence[];
+  /** Why a generic source term names this catalog service, when it is not literal. */
+  mappingNote: string | null;
+}
+
+/**
+ * How an unresolved source contradiction limits what may be concluded.
+ *   blocks_inheritance    — the national claim is contested, so a
+ *                           jurisdiction that does not state the service
+ *                           gets "disputed", never "inherited"
+ *   disputes_availability — availability itself is contested in the
+ *                           affected jurisdictions, even where an entry
+ *                           lists the service
+ */
+export const DISCREPANCY_EFFECTS = ["blocks_inheritance", "disputes_availability"] as const;
+export type DiscrepancyEffect = (typeof DISCREPANCY_EFFECTS)[number];
+
+/** Conflicting source statements, kept side by side and never resolved in code. */
+export interface KnowledgeSourceDiscrepancy {
+  id: string;
+  entityType: KnowledgeEntityType;
+  serviceKeys: ServiceKey[];
+  /** A neutral statement of the open question (authored). */
+  question: string;
+  effect: DiscrepancyEffect;
+  /** Jurisdictions affected: all of them, or all except those listed. */
+  affects: { allExcept: JurisdictionCode[] };
+  /** Two or more verbatim, conflicting passages. */
+  claims: SharedEvidence[];
+  /** Always null until a person resolves it from a better source. */
+  resolution: null;
+}
+
+// ── Effective availability (derived) ─────────────────────────────────────────
+
+/**
+ * What the Knowledge Base can say about one service in one jurisdiction.
+ *   direct      — stated in this jurisdiction's own entry
+ *   inherited   — not stated in the entry; an uncontested national source
+ *                 rule makes it available
+ *   not_offered — the source says it is not a product (nationally or here)
+ *   restricted  — the source restricts it to other jurisdictions
+ *   disputed    — conflicting source statements; do not assert either way
+ *   unknown     — nothing in the source settles it. Silence is NEVER "not offered".
+ */
+export const SERVICE_AVAILABILITY_STATUSES = ["direct", "inherited", "not_offered", "restricted", "disputed", "unknown"] as const;
+export type ServiceAvailabilityStatus = (typeof SERVICE_AVAILABILITY_STATUSES)[number];
+
+export const SERVICE_AVAILABILITY_REASONS = [
+  "stated_in_entry",
+  "national_rule",
+  "national_rule_disputed",
+  "availability_disputed",
+  "not_offered_nationally",
+  "not_offered_in_jurisdiction",
+  "restricted_to_other_jurisdictions",
+  "varies_by_state_not_stated",
+  "no_statement",
+] as const;
+export type ServiceAvailabilityReason = (typeof SERVICE_AVAILABILITY_REASONS)[number];

@@ -33,6 +33,12 @@ import {
   type KnowledgeSource,
   type SectionTemplateEntry,
   type KnowledgeEntityType,
+  type KnowledgeSharedService,
+  type KnowledgeSourceDiscrepancy,
+  type SharedEvidence,
+  DISCREPANCY_EFFECTS,
+  SHARED_AVAILABILITY,
+  SHARED_SCOPES,
 } from "./model.js";
 
 const set = (xs: readonly string[]) => new Set<string>(xs);
@@ -293,4 +299,145 @@ export function validateKnowledgeContent(
     identities.add(identity);
   }
   if (problems.length) throw new KnowledgeValidationError(problems);
+}
+
+// ── Shared services and discrepancies ────────────────────────────────────────
+
+
+/** The stored text an evidence location points at, or null when it does not resolve. */
+function evidenceText(
+  e: SharedEvidence,
+  articles: readonly KnowledgeArticleInput[],
+  sources: readonly KnowledgeSource[],
+): string | null {
+  const src = sources.find((s) => s.id === e.sourceId);
+  if (!src) return null;
+  if (e.location.kind === "source_notice") {
+    const key = e.location.noticeKey;
+    return src.notices.find((n) => n.key === key)?.text ?? null;
+  }
+  const { articleId: aid, sectionKey } = e.location;
+  const a = articles.find((x) => x.id === aid && x.provenance.sourceId === src.id);
+  return a?.sections.find((s) => s.key === sectionKey)?.content ?? null;
+}
+
+function evidenceProblems(
+  e: SharedEvidence,
+  where: string,
+  articles: readonly KnowledgeArticleInput[],
+  sources: readonly KnowledgeSource[],
+): string[] {
+  const text = evidenceText(e, articles, sources);
+  if (text === null) return [`${where}: evidence location does not resolve (${JSON.stringify(e.location)})`];
+  const p: string[] = [];
+  if (!e.quote.trim() || !text.includes(e.quote)) p.push(`${where}: quote is not in the cited source text`);
+  if (!e.term.trim() || !e.quote.includes(e.term)) p.push(`${where}: term "${e.term}" is not in its quote`);
+  return p;
+}
+
+/** Does any active discrepancy with this effect cover (service, jurisdiction)? */
+export function discrepancyCovers(
+  discrepancies: readonly KnowledgeSourceDiscrepancy[],
+  serviceKey: string,
+  jurisdiction: string,
+  effect: KnowledgeSourceDiscrepancy["effect"],
+): boolean {
+  return discrepancies.some(
+    (d) =>
+      d.resolution === null &&
+      d.effect === effect &&
+      (d.serviceKeys as string[]).includes(serviceKey) &&
+      !(d.affects.allExcept as string[]).includes(jurisdiction),
+  );
+}
+
+/**
+ * Validate shared-service records and discrepancies against the loaded
+ * articles and sources. Besides provenance, it refuses UNRECORDED
+ * contradictions: a service cannot be both nationally offered and
+ * state-varying, restricted and listed elsewhere, or "not a product" and
+ * listed, unless a discrepancy records the conflict.
+ */
+export function sharedContentProblems(
+  shared: readonly KnowledgeSharedService[],
+  discrepancies: readonly KnowledgeSourceDiscrepancy[],
+  articles: readonly KnowledgeArticleInput[],
+  sources: readonly KnowledgeSource[],
+): string[] {
+  const p: string[] = [];
+  const ids = new Set<string>();
+  for (const r of shared) {
+    const where = `shared service ${r.id}`;
+    if (ids.has(r.id)) p.push(`${where}: duplicate id`);
+    ids.add(r.id);
+    if (!ENTITY_TYPE_SET.has(r.entityType)) p.push(`${where}: unknown entity type`);
+    const svc = (SERVICE_CATALOG as Record<string, { label: string }>)[r.serviceKey];
+    if (!svc) p.push(`${where}: unknown service "${r.serviceKey}"`);
+    if (!(SHARED_SCOPES as readonly string[]).includes(r.scope)) p.push(`${where}: unknown scope "${r.scope}"`);
+    if (!(SHARED_AVAILABILITY as readonly string[]).includes(r.availability)) p.push(`${where}: unknown availability "${r.availability}"`);
+    if (r.scope === "national" && r.jurisdictions !== null) p.push(`${where}: a national record lists no jurisdictions`);
+    if (r.scope === "jurisdictions") {
+      if (!r.jurisdictions?.length) p.push(`${where}: lists no jurisdictions`);
+      for (const j of r.jurisdictions ?? []) if (!jurisdictionByCode(j)) p.push(`${where}: unknown jurisdiction "${j}"`);
+    }
+    if (r.availability === "exclusive" && r.scope !== "jurisdictions") p.push(`${where}: "exclusive" needs listed jurisdictions`);
+    if (r.availability === "varies_by_state" && r.scope !== "national") p.push(`${where}: "varies_by_state" is a national statement`);
+    // No shared record without a verbatim passage behind it.
+    if (!r.evidence.length) p.push(`${where}: has no source evidence`);
+    r.evidence.forEach((e, i) => p.push(...evidenceProblems(e, `${where} evidence ${i + 1}`, articles, sources)));
+    r.caveats.forEach((e, i) => p.push(...evidenceProblems(e, `${where} caveat ${i + 1}`, articles, sources)));
+    if (r.evidence.some((e) => sources.find((s) => s.id === e.sourceId)?.entityType !== r.entityType))
+      p.push(`${where}: evidence comes from a source for another entity type`);
+    // Topics must be supported by the quotes or by the service's own catalog name.
+    const text = [...r.evidence.map((e) => e.quote), svc?.label ?? ""].join(" ");
+    for (const t of r.topics) {
+      const re = (TOPIC_EVIDENCE as Record<string, RegExp>)[t];
+      if (!re) p.push(`${where}: unknown topic "${t}"`);
+      else if (!re.test(text)) p.push(`${where}: topic "${t}" is not supported by its evidence`);
+    }
+  }
+
+  const dIds = new Set<string>();
+  for (const d of discrepancies) {
+    const where = `discrepancy ${d.id}`;
+    if (dIds.has(d.id)) p.push(`${where}: duplicate id`);
+    dIds.add(d.id);
+    if (!(DISCREPANCY_EFFECTS as readonly string[]).includes(d.effect)) p.push(`${where}: unknown effect "${d.effect}"`);
+    if (d.resolution !== null) p.push(`${where}: discrepancies are never resolved in code`);
+    if (d.claims.length < 2) p.push(`${where}: needs at least two conflicting claims`);
+    d.claims.forEach((e, i) => p.push(...evidenceProblems(e, `${where} claim ${i + 1}`, articles, sources)));
+    for (const k of d.serviceKeys) if (!(k in SERVICE_CATALOG)) p.push(`${where}: unknown service "${k}"`);
+    if (!d.question.trim()) p.push(`${where}: states no question`);
+  }
+
+  // Unrecorded contradictions are content errors.
+  const byKey = new Map<string, KnowledgeSharedService[]>();
+  for (const r of shared) byKey.set(r.serviceKey, [...(byKey.get(r.serviceKey) ?? []), r]);
+  for (const [key, rules] of byKey) {
+    const has = (a: string, scope?: string) => rules.some((r) => r.availability === a && (!scope || r.scope === scope));
+    const coveredEverywhere = (effect: KnowledgeSourceDiscrepancy["effect"]) =>
+      discrepancies.some((d) => d.effect === effect && (d.serviceKeys as string[]).includes(key));
+    // A jurisdiction-scoped exception is a legitimate override of a national
+    // default (more specific wins); a conflicting NATIONAL claim is not.
+    if (
+      has("offered", "national") &&
+      (has("varies_by_state") || has("exclusive") || has("not_offered", "national")) &&
+      !coveredEverywhere("blocks_inheritance") &&
+      !coveredEverywhere("disputes_availability")
+    )
+      p.push(`service ${key}: offered nationally by one record and limited by another, with no discrepancy recorded`);
+    for (const a of articles) {
+      if (!a.sections.some((s) => (s.serviceKeys as string[]).includes(key))) continue;
+      const j = a.jurisdictionCode;
+      const conflict = rules.some(
+        (r) =>
+          r.entityType === a.entityType &&
+          ((r.availability === "not_offered" && (r.scope === "national" || (r.jurisdictions as string[]).includes(j))) ||
+            (r.availability === "exclusive" && !(r.jurisdictions as string[]).includes(j))),
+      );
+      if (conflict && !discrepancyCovers(discrepancies, key, j, "disputes_availability"))
+        p.push(`service ${key}: ${a.id} lists it, but a source rule says it is not offered there — record the discrepancy`);
+    }
+  }
+  return p;
 }

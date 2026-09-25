@@ -99,6 +99,48 @@ describe("GET /knowledge/articles", () => {
   });
 });
 
+describe("direct vs inherited metadata in the list", () => {
+  it("summaries separate direct, inherited and effective metadata", async () => {
+    const fl = (await get("/knowledge/articles?jurisdiction=FL")).body.articles[0];
+    expect(fl.inheritedServiceKeys).toEqual([
+      "virtual_office", "mail_forwarding", "instant_bank_account", "business_insurance", "business_financing_referral", "boi_compliance",
+    ]);
+    expect(fl.directServiceKeys).not.toContain("instant_bank_account");
+    expect(fl.effectiveServiceKeys).toContain("instant_bank_account");
+    expect(fl.serviceKeys).toEqual(fl.directServiceKeys);
+    expect(fl.topics).toEqual(fl.directTopics);
+    expect(fl.inheritedTopics).toContain("banking");
+    expect(fl.disputedServiceKeys).toEqual(["convert_llc_to_close_llc", "corporate_binder_seal"]);
+  });
+
+  it("topic and service filters match effective metadata by default, direct metadata on request", async () => {
+    expect(ids(await get("/knowledge/articles?topic=banking")).length).toBe(5);
+    expect(ids(await get("/knowledge/articles?topic=banking&metadata=direct"))).toEqual(["llc-az-state-services", "llc-ca-state-services"]);
+    expect(ids(await get("/knowledge/articles?service=boi_compliance")).length).toBe(5);
+    expect(ids(await get("/knowledge/articles?service=boi_compliance&metadata=direct"))).toEqual(["llc-az-state-services", "llc-ca-state-services"]);
+    // Disputed or restricted services are never effective, even where printed.
+    expect(ids(await get("/knowledge/articles?service=convert_llc_to_close_llc"))).toEqual(["llc-wy-state-services"]);
+    expect(ids(await get("/knowledge/articles?service=convert_llc_to_close_llc&metadata=direct"))).toEqual([
+      "llc-az-state-services", "llc-ca-state-services", "llc-wy-state-services",
+    ]);
+    expect(ids(await get("/knowledge/articles?service=trademark_registration"))).toEqual([]);
+    expect((await get("/knowledge/articles?service=unicorns")).status).toBe(400);
+    expect((await get("/knowledge/articles?metadata=everything")).status).toBe(400);
+  });
+
+  it("a word search reports inherited matches separately from printed sections", async () => {
+    const res = await get("/knowledge/articles?q=Lendio");
+    expect(ids(res)).toEqual(ids(await get("/knowledge/articles")));
+    const byId = Object.fromEntries(res.body.articles.map((a: { id: string }) => [a.id, a]));
+    expect(byId["llc-az-state-services"].matchedSectionIds).toEqual(["llc-az-state-services:additional_services_available"]);
+    expect(byId["llc-az-state-services"].matchedInheritedServiceKeys).toEqual([]);
+    expect(byId["llc-fl-state-services"].matchedSectionIds).toEqual([]);
+    expect(byId["llc-fl-state-services"].matchedInheritedServiceKeys).toEqual(["business_financing_referral"]);
+    // Direct-only search sees only printed text.
+    expect(ids(await get("/knowledge/articles?q=Lendio&metadata=direct"))).toEqual(["llc-az-state-services", "llc-ca-state-services"]);
+  });
+});
+
 describe("GET /knowledge/articles/:idOrSlug", () => {
   it("returns one article by id with ordered sections, citations and its source", async () => {
     const res = await get("/knowledge/articles/llc-az-state-services");
@@ -130,6 +172,32 @@ describe("GET /knowledge/articles/:idOrSlug", () => {
       internalOnly: true,
       counselReviewed: false,
     });
+  });
+
+  it("explains why each service applies, with the shared records and discrepancies behind it", async () => {
+    const res = await get("/knowledge/articles/llc-fl-state-services");
+    expect(res.status).toBe(200);
+    const bank = res.body.serviceAvailability.find((x: { serviceKey: string }) => x.serviceKey === "instant_bank_account");
+    expect(bank).toMatchObject({
+      status: "inherited",
+      reason: "national_rule",
+      directlyMentioned: false,
+      sourceScope: "national",
+      sharedServiceIds: ["llc-shared:instant_bank_account:national-offered"],
+    });
+    const rule = res.body.sharedServices.find((r: { id: string }) => r.id === "llc-shared:instant_bank_account:national-offered");
+    expect(rule.evidence[0]).toMatchObject({
+      term: "banking",
+      citation: "LLC Formation Services by State → WHAT VARIES BY STATE, AND WHAT DOES NOT (p. 3)",
+    });
+    const close = res.body.serviceAvailability.find((x: { serviceKey: string }) => x.serviceKey === "convert_llc_to_close_llc");
+    expect(close).toMatchObject({ status: "disputed", directlyMentioned: false });
+    expect(res.body.sourceDiscrepancies.map((d: { id: string }) => d.id).sort()).toEqual([
+      "llc-discrepancy:convert-llc-to-close-llc-availability",
+      "llc-discrepancy:corporate-binder-scope",
+    ]);
+    // The printed sections are unchanged: no inherited text appears in the article.
+    expect(JSON.stringify(res.body.sections)).not.toContain("Instant Bank Account");
   });
 
   it("the same article by its slug", async () => {

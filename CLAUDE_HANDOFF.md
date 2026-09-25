@@ -4,23 +4,26 @@
 re-discovering the repository. If you change the architecture, update this
 file in the same change.
 
-**Updated — 2026-09-25, Phase 8 (Knowledge Base foundation).** Built on the
-checkpoint `980fa23` ("Checkpoint: sync handoff after Phase 7", = `origin/main`
-when Phase 8 began). Default branch `main`; private remote
+**Updated — 2026-09-25, Phase 8A follow-up (shared/national services).**
+Built on `e6035cc` ("Phase 8: Knowledge Base foundation (LLC pilot)", =
+`origin/main` when the follow-up began; Phase 8 itself built on the
+checkpoint `980fa23`). Default branch `main`; private remote
 `inaris-pr/cases-crm`.
 
 | Gate | Baseline |
 |---|---|
 | `pnpm typecheck` | clean (api-server src + tests, web, lib/access, lib/db) |
-| `pnpm test` | **730 tests in 52 files**, all passing (Vitest + Supertest) |
-| `pnpm test:e2e` | **54 Playwright tests in 4 spec files** (unchanged by Phase 8 — no frontend change) |
-| GitHub Actions | green at `980fa23`: Node 20 and Node 22 typecheck + test, Playwright browser suite |
+| `pnpm test` | **761 tests in 53 files**, all passing (Vitest + Supertest) |
+| `pnpm test:e2e` | **54 Playwright tests in 4 spec files** (unchanged by Phase 8 and its follow-up — no frontend change) |
+| GitHub Actions | green at `980fa23` (owner-confirmed); `e6035cc` is on `origin/main` — its CI result was not visible from this session. Jobs: Node 20 and Node 22 typecheck + test, Playwright browser suite |
 
 **Status:** RBAC Phases 1–6 and Phase 7 (case lifecycle, categories,
 escalations — with its follow-ups: Category on the Board's New Case popup,
 the unified newest-first Case Thread) are complete. **Phase 8 — Knowledge
 Base foundation** is implemented (backend/content only: canonical article
-model, five LLC pilot articles, read API; §2 Knowledge Base). **No Knowledge
+model, five LLC pilot articles, read API; §2 Knowledge Base), plus the
+**8A follow-up**: explicit shared/national service rules with provenance,
+and direct vs inherited vs effective service metadata. **No Knowledge
 Base UI, Case recommendations or Knowledge Assistant exist yet.** Automations
 can be configured but are **never executed**.
 
@@ -117,6 +120,7 @@ Since recovery (2026-09-22 → 2026-09-25, see CHANGELOG.md):
 | Phase 7 follow-ups | Category on the Board's New Case popup; the Case Thread as a unified timeline of comments + system activity (§2 Case Thread) |
 | `980fa23` | Checkpoint: handoff/docs synchronized after Phase 7 |
 | Phase 8 | Knowledge Base foundation: canonical article model, validation, five source-controlled LLC pilot articles (AZ, CA, DE, FL, WY), read-only API under `knowledge.view`; no UI (§2 Knowledge Base) |
+| Phase 8A follow-up | Shared/national service rules with provenance; direct vs inherited vs effective service availability; unresolved source discrepancies (§2 Knowledge Base) |
 
 ---
 
@@ -725,6 +729,90 @@ embeddings, no LLM calls**. Code in `artifacts/api-server/src/knowledge/`.
 - **Future Case matching** can key on entityType, jurisdictionCode, topics,
   serviceKeys, flags and serviceProfile; nothing is connected to Cases yet.
 
+#### Shared / national services — direct vs inherited vs effective (8A follow-up)
+
+The source restates some services in every entry, yet the Delaware, Florida
+and Wyoming entries do not print the national add-on list. **Omission is
+not unavailability**, and **no text is copied into an article** — the
+distinction lives in metadata with a citation path.
+
+- **Three layers.** *Direct* = printed in the jurisdiction's entry
+  (`directServiceKeys`/`directTopics`, identical to the old `serviceKeys`/
+  `topics`). *Shared* = explicit source rules in `content/llcShared.ts`
+  (`KnowledgeSharedService`). *Effective* = what may be treated as
+  applicable: `effectiveServiceKeys` = services whose status is `direct` or
+  `inherited`; `effectiveTopics` = direct ∪ inherited topics.
+- **KnowledgeSharedService**: id, entityType, serviceKey, scope
+  (`national` | `jurisdictions` + list), availability (`offered` |
+  `not_offered` | `varies_by_state` | `exclusive`), termsVaryByState, topics,
+  `evidence[]` and `caveats[]` (each: sourceId, location = a source notice
+  or an article section, verbatim `quote`, the exact `term` naming the
+  service), `mappingNote` (when a generic source term such as "banking" names
+  a catalog service). Validation: every record has evidence; every quote is
+  in the stored text; every term is in its quote; topics are supported;
+  **a conflict between records, or between a rule and an entry, must be
+  recorded as a discrepancy** or the content refuses to load.
+- **The source's explicit shared statements** (nothing inferred from a
+  service merely appearing in several entries):
+  - p. 3 "WHAT VARIES BY STATE, AND WHAT DOES NOT": LLC formation
+    selectable in all 51 jurisdictions; EIN, operating agreements, S-corp and
+    other tax elections, apostille, banking, the corporate binder and the
+    governance document library "priced flat nationally and do not vary";
+    formation filing, registered agent, annual report and renewal filing,
+    amendments, certificates and certified copies, DBA, foreign registration,
+    dissolution and conversions "genuinely vary by state" (no national
+    default).
+  - In-entry (printed in 45 of the 51 entries; not DE, DC, FL, NM, TX, WY):
+    "Available nationally regardless of state: Virtual Office …, mail receipt
+    / scanning / forwarding, Instant Bank Account …, business insurance …,
+    business financing referral …, and Corporate Transparency Act / BOI
+    compliance", and "State-varying services include …".
+  - p. 3 "SERVICES WE DO NOT PROVIDE": trademark registration, standalone
+    business license services, tax preparation/filing → `not_offered`.
+  - p. 3 BOI delivery risk → a caveat carried by `boi_compliance` wherever it
+    applies. Wyoming: products restricted to Wyoming → `exclusive` [WY].
+    Arizona: "no renewal filing is sold" → `not_offered` [AZ].
+- **`serviceAvailability`** (every catalog service, every article):
+  `status` = `direct` | `inherited` | `not_offered` | `restricted` |
+  `disputed` | `unknown`, a `reason` code, `directlyMentioned`,
+  `sourceScope` (`jurisdiction` | `national` | `other_jurisdictions`),
+  `directSectionIds`, `sharedServiceIds`, `discrepancyIds`, `caveats`.
+  Resolved in `availability.ts`, most specific first: (1) an availability
+  discrepancy → disputed; (2) a rule for THIS jurisdiction saying not
+  offered → not_offered; (3) restricted to other jurisdictions →
+  restricted; (4) printed in the entry → direct; (5) national not-a-product
+  → not_offered; (6) national offered → inherited, or disputed if the
+  national claim is contested; (7) varies by state and silent → unknown;
+  (8) nothing → unknown. **Silence never yields not_offered.**
+- **Discrepancies** (`KnowledgeSourceDiscrepancy`, `resolution: null`
+  always): conflicting verbatim claims side by side, with effect
+  `blocks_inheritance` or `disputes_availability`. Recorded:
+  *corporate binder* (p. 3 flat-national vs the entries' state-varying list →
+  never inherited; disputed in DE/FL/WY, still direct in AZ/CA) and *Convert
+  LLC to Close LLC* (listed as state-varying in other entries vs Wyoming's
+  "restricted to Wyoming" → disputed everywhere except WY, including AZ/CA
+  where it is printed). Neither is resolved in code.
+- **Pilot result:** DE, FL, WY inherit virtual office, mail forwarding,
+  Instant Bank Account, business insurance, business financing referral and
+  BOI compliance (national, not directly mentioned); AZ and CA state them
+  directly. Wyoming-only products are `restricted` in AZ/CA/DE/FL.
+  Unprinted state-varying services (e.g. DE's DBA; DE/FL/WY foreign
+  registration, dissolution, reinstatement) are `unknown`.
+- **API** (additive): list summaries add `direct*`/`inherited*`/`effective*`
+  topics and service keys and `disputedServiceKeys`; new filters `service`
+  and `metadata=effective|direct` (topic/service match effective metadata by
+  default); `q` reports printed matches in `matchedSectionIds` and inherited
+  ones separately in `matchedInheritedServiceKeys`. The detail response adds
+  `serviceAvailability`, the `sharedServices` and `sourceDiscrepancies`
+  bearing on the article, each with human-readable citations
+  (e.g. "LLC Formation Services by State → WHAT VARIES BY STATE, AND WHAT
+  DOES NOT (p. 3)" vs "Florida — LLC Services & Requirements → Additional
+  Services Available"). No new route.
+- **Future RAG must answer conservatively from `serviceAvailability`**:
+  distinguish direct / inherited (cite the national rule) / not offered or
+  restricted (cite the rule) / disputed (show both claims) / unknown (say
+  so) — never turn silence or a dispute into a yes or a no.
+
 ### Domain model
 
 - **Account** — a company; ~46 Salesforce-style entity-formation fields.
@@ -979,7 +1067,7 @@ against the ten keys; `null`/omitted = uncategorized.
 
 ### Test coverage
 
-`pnpm test`: Vitest + Supertest, **52 files / 730 tests** in
+`pnpm test`: Vitest + Supertest, **53 files / 761 tests** in
 `artifacts/api-server/test/`. Covers authentication (passwords, sessions,
 expiry, revocation, throttling, spoofing, same-origin, the 401 on every
 route), the permission core (the approved matrix cell by cell, resolver,
@@ -992,8 +1080,10 @@ leakage, zeros), case lifecycle/categories/escalations, the Thread feed
 (merging, newest-first order, ties, immutability, call aggregation,
 mentions, RBAC), a pre-Phase-7 store loading without migration, the
 Knowledge Base (model rules, the five pilot articles re-checked word for word
-against a raw extract of the source PDF in `test/fixtures/`, the read API
-and its access, a pre-Phase-8 store loading unchanged), and the API
+against a raw extract of the source PDF in `test/fixtures/`, shared/national
+service rules, direct vs inherited vs effective availability and precedence,
+the read API and its access, a pre-Phase-8 store loading unchanged), and the
+API
 end to end — plus pure frontend modules imported directly (`lib/records.ts`,
 `lib/caseLinks.ts`, `lib/caseSort.ts`, `lib/caseMeta.ts`, `lib/session.ts`).
 
@@ -1181,7 +1271,8 @@ and CI all green, committed separately and not pushed automatically.
 Candidate next phases (none started):
 
 0. **Phase 8B — remaining LLC articles**: generate the other 46 states + D.C.
-   from the same PDF with the Phase 8 extraction rules, classify the 16
+   from the same PDF with the Phase 8 extraction rules (the shared rules in
+   `llcShared.ts` then apply to them unchanged), classify the 16
    remaining highlighted boxes (the source also uses titles such as "Annual
    Certificate and Agent Fee" and "…— Verify Before Relying"), extend the
    fidelity fixture, then the Knowledge Base reader UI, Case

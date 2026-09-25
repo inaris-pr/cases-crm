@@ -10,11 +10,42 @@ recovered working tree — the project had no repository, so there is no history
 ## [Unreleased]
 
 Everything since the recovery release, 2026-09-22 → 2026-09-25.
-State at the end of this section: typecheck clean, **730 tests in 52 files**;
+State at the end of this section: typecheck clean, **761 tests in 53 files**;
 Playwright **54 tests** (unchanged by Phase 8); GitHub Actions green at the
-checkpoint `980fa23` (Node 20, Node 22, Playwright). RBAC Phases 1–6,
-Phase 7 with its follow-ups, and the Phase 8 Knowledge Base foundation are
-complete; later Knowledge Base phases have not started.
+checkpoint `980fa23` (Node 20, Node 22, Playwright); `e6035cc` is pushed. RBAC Phases 1–6, Phase 7 with its
+follow-ups, and the Phase 8 Knowledge Base foundation with its 8A follow-up
+are complete; later Knowledge Base phases have not started.
+
+### Added — Phase 8A follow-up: shared/national services (2026-09-25)
+- The Knowledge Base now separates **direct** content (printed in a
+  jurisdiction's entry), **shared** source rules (explicit national or
+  multi-jurisdiction statements in the LLC PDF) and **effective** metadata
+  (direct ∪ inherited). A service an entry does not print is never treated
+  as unavailable; no text was added to any article.
+- `KnowledgeSharedService` records (`content/llcShared.ts`), each with
+  verbatim, validated evidence: nationally offered (p. 3 flat-priced list and
+  the entries' "Available nationally regardless of state" list), not a
+  product (p. 3), varies by state (no national default), Wyoming-only
+  products, and Arizona's "no renewal filing is sold". The BOI delivery-risk
+  notice travels as a caveat.
+- `KnowledgeSourceDiscrepancy` records, never resolved in code: the corporate
+  binder's scope (flat-national vs state-varying) and Convert LLC to Close
+  LLC (listed by other entries vs "restricted to Wyoming").
+- Per article: `serviceAvailability` for every catalog service
+  (direct / inherited / not_offered / restricted / disputed / unknown, with
+  reason, sections, shared records, discrepancies and caveats), and
+  `directServiceKeys`/`inheritedServiceKeys`/`effectiveServiceKeys`,
+  `directTopics`/`inheritedTopics`/`effectiveTopics`, `disputedServiceKeys`.
+  `serviceKeys`/`topics` are unchanged (direct).
+- API (additive): new list filters `service` and `metadata=effective|direct`
+  (topic/service filters now match effective metadata by default);
+  `matchedInheritedServiceKeys` beside `matchedSectionIds` for `q`; the
+  detail response adds `serviceAvailability`, `sharedServices` and
+  `sourceDiscrepancies` with citations. No new route, no write API.
+- Delaware, Florida and Wyoming now inherit the six nationally listed
+  add-ons; their article text is unchanged. No store, schema or migration
+  change; no frontend change.
+- Tests: +31 (761 total).
 
 ### Added — Phase 8: Knowledge Base foundation (2026-09-25)
 - One canonical Knowledge Base repository (`artifacts/api-server/src/knowledge/`)

@@ -72,7 +72,11 @@ five internal LLC pilot articles; there is no Knowledge Base page yet.
    with Corporation rules. An **Open Research Item stays unverified** and is
    never presented as a requirement; "published" means internal only, never
    customer-facing or counsel-reviewed. One repository serves every future
-   consumer (UI, Case recommendations, Knowledge Assistant).
+   consumer (UI, Case recommendations, Knowledge Assistant). **A service an
+   entry does not print is not "unavailable"**: national applicability comes
+   only from explicit, cited shared rules (`content/llcShared.ts`), is
+   exposed as *inherited* metadata — never as article text — and source
+   contradictions stay recorded as unresolved discrepancies.
 10. **Every change ends green**: `pnpm typecheck`, `pnpm test`,
    `pnpm test:e2e`, and CI (Node 20, Node 22, Playwright). Commit each phase
    separately; never push without the owner's approval.
@@ -87,7 +91,7 @@ Run from `cases-app/`. Requires Node ≥20 and pnpm 9.0.0 (`corepack prepare pnp
 | `pnpm dev:api` | API only |
 | `pnpm dev:web` | Frontend only (proxies /api to :3001) |
 | `pnpm typecheck` | tsc --noEmit across the workspace (API src + tests, web, lib/db, lib/access) — **must stay clean** |
-| `pnpm test` | Vitest + Supertest suite (52 files, 730 tests) — **must stay green** |
+| `pnpm test` | Vitest + Supertest suite (53 files, 761 tests) — **must stay green** |
 | `pnpm test:e2e` | Playwright RBAC, dashboard and case-lifecycle browser suite (e2e/, 54 tests; own API + Vite on 3101/5174, temp data) |
 | `pnpm build` | esbuild bundle for the API, `tsc -b && vite build` for the web |
 | `pnpm api:generate` | Orval regen from the OpenAPI spec — **do not run**; the spec is stale |
@@ -235,7 +239,15 @@ it, debounced, after every successful non-GET request.
   `<entityType>-<code>-state-services`, section ids `<articleId>:<key>`.
   `test/knowledge-pilot.test.ts` re-reads a raw PDF extract
   (`test/fixtures/llcPilotSourceExtract.ts`) and fails on any changed,
-  dropped or reordered word. Details: CLAUDE_HANDOFF.md §2 "Knowledge Base".
+  dropped or reordered word. **Shared services (8A follow-up):**
+  `content/llcShared.ts` holds the explicit national / multi-jurisdiction
+  service rules (each with verbatim, validated evidence) and the unresolved
+  `LLC_SOURCE_DISCREPANCIES`; `availability.ts` resolves every service per
+  article to direct / inherited / not_offered / restricted / disputed /
+  unknown by a fixed precedence. Keep `serviceKeys`/`topics` = direct; use
+  `effective*` for filtering; never add a shared rule without a source
+  statement of scope, never resolve a discrepancy in code, and never let
+  silence become "not offered". Details: CLAUDE_HANDOFF.md §2 "Knowledge Base".
 - **`lib/access` is the single source of access rules** (Phase 2): role keys,
   the permission catalog, own/team/all scopes, role bundles, Account field
   groups with sensitive-read rules, Settings/Insights permissions, the
@@ -289,7 +301,7 @@ it, debounced, after every successful non-GET request.
 ## Tests
 
 `pnpm test` from the root, or `pnpm --filter @cases/api-server test`.
-Vitest + Supertest, in `artifacts/api-server/test/` — 52 files, 730 tests.
+Vitest + Supertest, in `artifacts/api-server/test/` — 53 files, 761 tests.
 
 - **Every request needs a session.** `test/helpers/app.ts` logs in through the
   real endpoint: `asMe` is Iris's session cookie, `loginAs(email)` returns
