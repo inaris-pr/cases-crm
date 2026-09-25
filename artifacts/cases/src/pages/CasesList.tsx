@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { API, fetchJson } from "@/lib/api";
 import type {
+  CaseCategory,
   CaseStatus,
   CasePriority,
   CaseWithCustomer,
@@ -30,6 +31,8 @@ import { formatDate } from "@/lib/format";
 import { cn } from "@/lib/cn";
 import { CasesBoard } from "./CasesBoard";
 import { NewCaseDrawer } from "@/components/cases/NewCaseDrawer";
+import { CategoryChip, EscalationMarker } from "@/components/cases/CaseLifecycle";
+import { CASE_CATEGORY_OPTIONS } from "@/lib/caseMeta";
 import { can } from "@cases/access";
 import { useAuth } from "@/lib/auth";
 import {
@@ -53,6 +56,10 @@ export function CasesList() {
   const [status, setStatus] = useState<CaseStatus | "">("");
   const [priority, setPriority] = useState<CasePriority | "">("");
   const [assignee, setAssignee] = useState<string>(""); // "" = all, otherwise teammate name
+  // Phase 7: "" = all; a category key or "uncategorized".
+  const [category, setCategory] = useState<CaseCategory | "uncategorized" | "">("");
+  // Phase 7: "" = all, "true" = escalated, "false" = not escalated.
+  const [escalated, setEscalated] = useState<"" | "true" | "false">("");
   const [open, setOpen] = useState(false);
   const [draftStatus, setDraftStatus] = useState<CaseStatus | undefined>(undefined);
   // Table-only column sort. null = default (Last Modified, newest first).
@@ -66,7 +73,7 @@ export function CasesList() {
   });
 
   const cases = useQuery({
-    queryKey: ["cases", { status, priority, search, assignee }],
+    queryKey: ["cases", { status, priority, search, assignee, category, escalated }],
     queryFn: () =>
       fetchJson<CaseWithCustomer[]>(
         API(
@@ -75,6 +82,8 @@ export function CasesList() {
             ...(priority ? { priority } : {}),
             ...(search ? { search } : {}),
             ...(assignee ? { assignee } : {}),
+            ...(category ? { category } : {}),
+            ...(escalated ? { escalated } : {}),
           }).toString()}`,
         ),
       ),
@@ -128,6 +137,10 @@ export function CasesList() {
             setPriority={setPriority}
             assignee={assignee}
             setAssignee={setAssignee}
+            category={category}
+            setCategory={setCategory}
+            escalated={escalated}
+            setEscalated={setEscalated}
             team={team.data ?? []}
           />
 
@@ -163,11 +176,21 @@ export function CasesList() {
                     {sortCases(cases.data ?? [], sort).map((c) => (
                       <Fragment key={c.id}>
                         <tr
+                          data-testid="case-row"
+                          data-case-number={c.caseNumber}
                           onClick={() => navigate(`/cases/${c.id}`)}
                           className="border-b border-white/5 hover:bg-white/[0.03] transition-colors cursor-pointer group"
                         >
                           <td className="px-4 py-2.5 font-mono text-xs text-white/50">{c.caseNumber}</td>
-                          <td className="px-3 py-2.5 font-medium">{c.title}</td>
+                          <td className="px-3 py-2.5 font-medium">
+                            <div>{c.title}</div>
+                            {(c.category || c.activeEscalation) && (
+                              <div className="flex items-center gap-1 mt-1 flex-wrap">
+                                <EscalationMarker escalation={c.activeEscalation} />
+                                <CategoryChip category={c.category} />
+                              </div>
+                            )}
+                          </td>
                           <td className="px-3 py-2.5 text-white/70">{c.customer?.name ?? "—"}</td>
                           <td className="px-3 py-2.5">
                             <StatusBadge status={c.status} />
@@ -296,6 +319,10 @@ function FilterBar({
   setPriority,
   assignee,
   setAssignee,
+  category,
+  setCategory,
+  escalated,
+  setEscalated,
   team,
 }: {
   search: string;
@@ -306,6 +333,10 @@ function FilterBar({
   setPriority: (v: CasePriority | "") => void;
   assignee: string;
   setAssignee: (v: string) => void;
+  category: CaseCategory | "uncategorized" | "";
+  setCategory: (v: CaseCategory | "uncategorized" | "") => void;
+  escalated: "" | "true" | "false";
+  setEscalated: (v: "" | "true" | "false") => void;
   team: string[];
 }) {
   const [open, setOpen] = useState(false);
@@ -320,7 +351,7 @@ function FilterBar({
     return () => document.removeEventListener("mousedown", onDoc);
   }, [open]);
 
-  const activeCount = (status ? 1 : 0) + (priority ? 1 : 0);
+  const activeCount = (status ? 1 : 0) + (priority ? 1 : 0) + (category ? 1 : 0) + (escalated ? 1 : 0);
 
   return (
     <div className="flex items-center gap-2 flex-wrap">
@@ -352,6 +383,7 @@ function FilterBar({
       {/* Filters button + popover */}
       <div ref={ref} className="relative">
         <button
+          data-testid="case-filters"
           onClick={() => setOpen((v) => !v)}
           className={cn(
             "inline-flex items-center gap-1.5 h-8 px-2.5 rounded-md border text-xs transition",
@@ -399,11 +431,43 @@ function FilterBar({
                 <option value="critical">Critical</option>
               </Select>
             </div>
+            <div>
+              <Label>Category</Label>
+              <Select
+                data-testid="filter-category"
+                value={category}
+                onChange={(e) => setCategory(e.target.value as CaseCategory | "uncategorized" | "")}
+                className="!h-8 !text-xs"
+              >
+                <option value="">All categories</option>
+                {CASE_CATEGORY_OPTIONS.map((o) => (
+                  <option key={o.key} value={o.key}>
+                    {o.label}
+                  </option>
+                ))}
+                <option value="uncategorized">Uncategorized</option>
+              </Select>
+            </div>
+            <div>
+              <Label>Escalation</Label>
+              <Select
+                data-testid="filter-escalated"
+                value={escalated}
+                onChange={(e) => setEscalated(e.target.value as "" | "true" | "false")}
+                className="!h-8 !text-xs"
+              >
+                <option value="">All cases</option>
+                <option value="true">Escalated</option>
+                <option value="false">Not escalated</option>
+              </Select>
+            </div>
             {activeCount > 0 && (
               <button
                 onClick={() => {
                   setStatus("");
                   setPriority("");
+                  setCategory("");
+                  setEscalated("");
                 }}
                 className="w-full text-[11px] text-white/50 hover:text-white inline-flex items-center justify-center gap-1 py-1 border border-white/10 rounded-md"
               >
@@ -478,6 +542,12 @@ function CaseCard({ caseItem }: { caseItem: CaseWithCustomer }) {
           <div className="font-mono text-[10px] tracking-wider text-white/40 uppercase">
             {caseItem.caseNumber}
           </div>
+          {(caseItem.category || caseItem.activeEscalation) && (
+            <div className="flex items-center gap-1 mt-1 flex-wrap">
+              <EscalationMarker escalation={caseItem.activeEscalation} />
+              <CategoryChip category={caseItem.category} />
+            </div>
+          )}
           <div className="text-base font-bold text-white mt-1 leading-tight">
             {caseItem.title}
           </div>

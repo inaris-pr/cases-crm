@@ -66,12 +66,17 @@ export const DASHBOARD_WIDGETS = {
   "lead-summary": { requires: SALES, section: "leads" },
   "people-summary": { requires: PEOPLE, section: "people" },
   "case-attention": { requires: CASES, section: "cases" },
+  "case-escalations": { requires: CASES, section: "cases" },
   "case-least-recent": { requires: CASES, section: "cases" },
   "case-workload": {
     requires: [{ permission: "metrics.cases", minScope: "team" }, { permission: "cases.view" }],
     section: "cases",
   },
   "case-breakdown": { requires: CASES, section: "cases" },
+  "case-categories": {
+    requires: [{ permission: "metrics.cases", minScope: "team" }, { permission: "cases.view" }],
+    section: "cases",
+  },
   "case-recent": { requires: CASES, section: "cases" },
   "case-activity": { requires: CASES, section: "cases" },
   "case-trend": { requires: CASES, section: "cases" },

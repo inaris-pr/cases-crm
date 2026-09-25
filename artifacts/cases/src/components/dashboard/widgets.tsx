@@ -16,6 +16,7 @@ import type { ReactNode } from "react";
 import { Link } from "wouter";
 import {
   AlarmClock,
+  Siren,
   Building2,
   CheckCircle2,
   Flame,
@@ -46,6 +47,7 @@ import {
   ago,
 } from "./parts";
 import { recordsPath } from "@/lib/records";
+import { categoryLabel, escalationReasonLabel } from "@/lib/caseMeta";
 
 export interface WidgetContext {
   permissions: EffectivePermissions;
@@ -101,6 +103,7 @@ const LEAD_COLOR: Record<LeadStatus, string> = {
   converted: "#10b981",
 };
 const REASON_LABEL = {
+  escalated: "Escalated",
   critical_priority: "Critical priority",
   high_priority: "High priority",
   overdue_tasks: "Overdue tasks",
@@ -140,11 +143,12 @@ export const WIDGETS: readonly DashboardWidget[] = [
       const s = cases.summary;
       const scope = SCOPE_LABEL[cases.scope];
       return (
-        <StatRow cols={5}>
+        <StatRow cols={6}>
           <StatCard testId="stat-open-cases" color="#3b82f6" label="Open cases" value={s.open} hint={scope} icon={FolderKanban} />
           <StatCard testId="stat-urgent-cases" color="#ef4444" label="High / critical" value={s.urgentOpen} hint="Open cases" icon={Flame} />
           <StatCard testId="stat-open-tasks" color="#f59e0b" label="Open tasks" value={s.openTasks} hint="On these cases" icon={ListTodo} />
           <StatCard testId="stat-overdue-tasks" color="#f97316" label="Overdue tasks" value={s.overdueTasks} hint="Past due, not completed" icon={AlarmClock} />
+          <StatCard testId="stat-escalated-cases" color="#e11d48" label="Escalated" value={s.activeEscalations} hint="Unresolved escalations" icon={Siren} />
           <StatCard testId="stat-completed-cases" color="#10b981" label="Completed" value={s.completed} hint={scope} icon={CheckCircle2} />
         </StatRow>
       );
@@ -202,7 +206,7 @@ export const WIDGETS: readonly DashboardWidget[] = [
     render: ({ cases }) => {
       if (!cases) return <Unavailable />;
       return (
-        <Panel title="Needs attention" subtitle="Open cases that are high / critical priority or have overdue tasks">
+        <Panel title="Needs attention" subtitle="Escalated cases, and open cases that are high / critical priority or have overdue tasks">
           <div className="space-y-1.5">
             {cases.attention.map((c) => (
               <CaseRow
@@ -210,15 +214,68 @@ export const WIDGETS: readonly DashboardWidget[] = [
                 c={c}
                 detail={
                   <>
-                    {(c.reasons ?? []).map((r) => REASON_LABEL[r]).join(" · ")}
+                    {(c.reasons ?? [])
+                      .map((r) => (r === "escalated" && c.escalation ? `Escalated: ${escalationReasonLabel(c.escalation.reason)}` : REASON_LABEL[r]))
+                      .join(" · ")}
                     {c.overdueTasks > 0 ? ` (${c.overdueTasks})` : ""}
                     {cases.scope !== "own" ? ` · ${c.ownerName}` : ""}
                   </>
                 }
               />
             ))}
-            {cases.attention.length === 0 && <EmptyLine>Nothing urgent and no overdue tasks.</EmptyLine>}
+            {cases.attention.length === 0 && <EmptyLine>No escalations, nothing urgent and no overdue tasks.</EmptyLine>}
           </div>
+        </Panel>
+      );
+    },
+  },
+  {
+    id: "case-escalations",
+    title: "Escalations",
+    layout: "half",
+    render: ({ cases }) => {
+      if (!cases) return <Unavailable />;
+      const who = { own: "Your cases", team: "You and your team", all: "All cases" }[cases.scope];
+      return (
+        <Panel title="Escalations" subtitle={`${who} · unresolved, longest waiting first`}>
+          <div className="space-y-1.5">
+            {cases.escalated.map((c) => (
+              <CaseRow
+                key={c.id}
+                c={c}
+                detail={
+                  <>
+                    {escalationReasonLabel(c.escalation!.reason)} · by {c.escalation!.escalatedByName} ·{" "}
+                    {ago(c.escalation!.escalatedAt)}
+                    {cases.scope !== "own" ? ` · ${c.ownerName}` : ""}
+                  </>
+                }
+              />
+            ))}
+            {cases.escalated.length === 0 && <EmptyLine>No unresolved escalations.</EmptyLine>}
+          </div>
+          {cases.scope !== "own" && (
+            <>
+              <div className="label-eyebrow mt-4 mb-2">Recent escalation activity</div>
+              <div className="space-y-1">
+                {cases.recentEscalations.map((e) => (
+                  <Link
+                    key={`${e.event}-${e.id}`}
+                    href={`/cases/${e.caseId}`}
+                    className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-white/5 text-xs"
+                    data-testid="recent-escalation"
+                  >
+                    <span className="font-mono text-white/40">{e.caseNumber}</span>
+                    <span className="truncate flex-1">
+                      {e.event === "escalated" ? "Escalated" : "Resolved"} · {escalationReasonLabel(e.reason)} · {e.byName}
+                    </span>
+                    <span className="text-white/40 shrink-0">{ago(e.at)}</span>
+                  </Link>
+                ))}
+                {cases.recentEscalations.length === 0 && <EmptyLine>No escalations yet.</EmptyLine>}
+              </div>
+            </>
+          )}
         </Panel>
       );
     },
@@ -270,6 +327,7 @@ export const WIDGETS: readonly DashboardWidget[] = [
                   <Th right>High / critical</Th>
                   <Th right>Open tasks</Th>
                   <Th right>Overdue tasks</Th>
+                  <Th right>Escalated</Th>
                 </tr>
               </thead>
               <tbody>
@@ -283,6 +341,7 @@ export const WIDGETS: readonly DashboardWidget[] = [
                     <Td right>{r.urgentCases}</Td>
                     <Td right>{r.openTasks}</Td>
                     <Td right>{r.overdueTasks}</Td>
+                    <Td right>{r.escalated}</Td>
                   </tr>
                 ))}
               </tbody>
@@ -311,6 +370,25 @@ export const WIDGETS: readonly DashboardWidget[] = [
               <Bars rows={cases.byPriority.map((p) => ({ key: `priority-${p.priority}`, label: p.priority, count: p.count, color: PRIORITY_COLOR[p.priority] }))} />
             </div>
           </div>
+        </Panel>
+      );
+    },
+  },
+  {
+    id: "case-categories",
+    title: "Open cases by category",
+    layout: "half",
+    render: ({ cases }) => {
+      if (!cases?.byCategory) return <Unavailable />;
+      return (
+        <Panel title="Open cases by category" subtitle={`${caseScopeText[cases.scope]} · cases without a category are counted as Uncategorized`}>
+          <Bars
+            rows={cases.byCategory.map((c) => ({
+              key: `category-${c.category ?? "none"}`,
+              label: categoryLabel(c.category),
+              count: c.count,
+            }))}
+          />
         </Panel>
       );
     },

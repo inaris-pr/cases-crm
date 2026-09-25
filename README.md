@@ -20,10 +20,12 @@ practice — leads, companies, the people behind them, and the matters in flight
   - **Clients** (people) — linked companies and cases, and **New case**
     pre-set to the client (pick the company if they have several).
   - **Cases** — Table, Cards and Board views; filters by status, priority,
-    assignee and search. The table sorts by **Case #** or **Created**
+    category, escalation, assignee and search. The table sorts by **Case #** or **Created**
     (click: ascending → descending → back to Last Modified).
 - **Case detail** — Overview (with separate Client and Account links),
-  Contacts, Thread, Tasks, Documents and **Automations**.
+  Contacts, Thread, Tasks, Documents and **Automations**; a primary
+  **category**, manual **escalations** with reason and history, closed date
+  and resolution time (when known), and the lifecycle history.
 - **Case automations** — build, name and save visual workflows per case, or
   share one globally with every case; customize a global for one case and
   revert. *Management only — automations are not executed yet.*
@@ -103,8 +105,8 @@ arrives with the role-based access phases.
 | `pnpm dev:api` | API only |
 | `pnpm dev:web` | Frontend only |
 | `pnpm typecheck` | TypeScript across the workspace — currently clean |
-| `pnpm test` | Test suite (Vitest + Supertest) — 583 tests in 43 files |
-| `pnpm test:e2e` | Playwright RBAC and dashboard browser suite (e2e/) — 39 tests |
+| `pnpm test` | Test suite (Vitest + Supertest) — 614 tests in 46 files |
+| `pnpm test:e2e` | Playwright RBAC, dashboard and case-lifecycle browser suite (e2e/) — 47 tests |
 | `pnpm build` | Production builds for everything |
 | `pnpm api:generate` | Orval regen — **don't**, the spec it reads is stale |
 

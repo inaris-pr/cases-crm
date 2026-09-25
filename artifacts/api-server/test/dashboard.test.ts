@@ -323,6 +323,7 @@ describe("empty data: true zeros", () => {
       ...store,
       accounts: [], contacts: [], accountContactLinks: [], leads: [], cases: [], tasks: [], documents: [],
       conversations: [], messages: [], caseInteractions: [], threadEntries: [], mentions: [], teams: [],
+      caseStatusEvents: [], caseEscalations: [],
       users: store.users.filter((u) => u.name === "Iris Burgos"),
     }) as unknown as typeof store;
   const principal = (roles: RoleKey[]): Principal => ({
@@ -333,7 +334,10 @@ describe("empty data: true zeros", () => {
 
   it("returns zero counts and empty lists — not missing sections — when nothing exists", () => {
     const d = buildDashboard(principal(["system_owner"]), empty(), new Date("2026-03-01T12:00:00Z"));
-    expect(d.cases!.summary).toEqual({ open: 0, completed: 0, urgentOpen: 0, openTasks: 0, overdueTasks: 0 });
+    expect(d.cases!.summary).toEqual({ open: 0, completed: 0, urgentOpen: 0, openTasks: 0, overdueTasks: 0, activeEscalations: 0 });
+    expect(d.cases!.escalated).toEqual([]);
+    expect(d.cases!.recentEscalations).toEqual([]);
+    expect(d.cases!.byCategory!.every((c) => c.count === 0)).toBe(true);
     expect(d.cases!.byStatus.every((s) => s.count === 0)).toBe(true);
     expect(d.cases!.byPriority.every((s) => s.count === 0)).toBe(true);
     expect(d.cases!.trend30).toHaveLength(30);

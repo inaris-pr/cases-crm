@@ -5,6 +5,9 @@
 // build time.)
 import type { EffectivePermissions, RoleKey } from "@cases/access";
 export type { EffectivePermissions, RoleKey } from "@cases/access";
+// Phase 7 taxonomy keys live in the pure lib/caseMeta.ts.
+import type { CaseCategory, EscalationReason } from "./caseMeta";
+export type { CaseCategory, EscalationReason };
 
 const BASE = (import.meta.env.BASE_URL ?? "/").replace(/\/$/, "");
 export const API = (path: string) => `${BASE}${path}`;
@@ -223,6 +226,48 @@ export interface Case {
   ownerUserId?: number | null;
   createdAt: string;
   updatedAt: string;
+  /** Phase 7: one primary category, or null = uncategorized. */
+  category: CaseCategory | null;
+  /**
+   * Phase 7: when the current closure happened and who closed it. Null while
+   * open, and for Cases closed before Phase 7 (closing time unknown).
+   */
+  closedAt: string | null;
+  closedByUserId: number | null;
+  closedByName: string | null;
+}
+
+export interface CaseEscalation {
+  id: number;
+  caseId: number;
+  reason: EscalationReason;
+  note: string | null;
+  escalatedAt: string;
+  escalatedByUserId: number | null;
+  escalatedByName: string;
+  resolvedAt: string | null;
+  resolvedByUserId: number | null;
+  resolvedByName: string | null;
+}
+
+export interface CaseStatusEvent {
+  id: number;
+  caseId: number;
+  kind: "status_change" | "closed" | "reopened";
+  fromStatus: CaseStatus | null;
+  toStatus: CaseStatus;
+  changedAt: string;
+  changedByUserId: number | null;
+  changedByName: string;
+}
+
+export interface CaseResolution {
+  /** closedAt − createdAt (ms): creation to the current closure, calendar time. */
+  totalMs: number;
+  /** Last reopen → current closure (ms); null if never reopened. */
+  latestCycleMs: number | null;
+  closedAt: string;
+  closures: number;
 }
 
 /**
@@ -253,6 +298,8 @@ export interface CaseWithRelations extends Case {
   account: Account | null;
   primaryContact: Contact | null;
   customer: Customer | null;
+  /** Phase 7: the unresolved escalation, if any. */
+  activeEscalation: CaseEscalation | null;
 }
 
 // Backwards-compat alias — old pages used CaseWithCustomer
@@ -282,6 +329,12 @@ export interface Doc {
 export interface CaseDetail extends CaseWithRelations {
   tasks: Task[];
   documents: Doc[];
+  /** Phase 7: recorded status changes, oldest first. */
+  statusHistory: CaseStatusEvent[];
+  /** Phase 7: every escalation, oldest first. */
+  escalations: CaseEscalation[];
+  /** Phase 7: only when the Case is closed with a known closedAt. */
+  resolution: CaseResolution | null;
 }
 
 export interface Stats {
@@ -469,12 +522,21 @@ export interface DashboardCaseItem {
   overdueTasks: number;
   lastActivityAt: string;
   lastActivitySource: ActivitySource;
-  reasons?: ("critical_priority" | "high_priority" | "overdue_tasks")[];
+  category: CaseCategory | null;
+  escalation: { id: number; reason: EscalationReason; escalatedAt: string; escalatedByName: string } | null;
+  reasons?: ("escalated" | "critical_priority" | "high_priority" | "overdue_tasks")[];
 }
 
 export interface DashboardCases {
   scope: DashboardScope;
-  summary: { open: number; completed: number; urgentOpen: number; openTasks: number; overdueTasks: number };
+  summary: {
+    open: number;
+    completed: number;
+    urgentOpen: number;
+    openTasks: number;
+    overdueTasks: number;
+    activeEscalations: number;
+  };
   byStatus: { status: CaseStatus; count: number }[];
   byPriority: { priority: CasePriority; count: number }[];
   trend30: { date: string; cases: number; tasks: number }[];
@@ -497,7 +559,19 @@ export interface DashboardCases {
     urgentCases: number;
     openTasks: number;
     overdueTasks: number;
+    escalated: number;
   }[];
+  escalated: DashboardCaseItem[];
+  recentEscalations: {
+    id: number;
+    caseId: number;
+    caseNumber: string;
+    event: "escalated" | "resolved";
+    reason: EscalationReason;
+    at: string;
+    byName: string;
+  }[];
+  byCategory?: { category: CaseCategory | null; count: number }[];
 }
 
 export interface DashboardCalls {

@@ -28,6 +28,7 @@ import type {
 } from "@/lib/api";
 import { Input, Label, Select, Textarea } from "@/components/ui/Input";
 import { PriorityBadge } from "@/components/ui/Badge";
+import { CategoryChip, EscalationMarker } from "@/components/cases/CaseLifecycle";
 import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/Button";
 import { CaseDetailModal } from "@/components/CaseDetailModal";
@@ -421,6 +422,8 @@ export function CasesBoard() {
                       <Icon size={12} />
                       {meta.label}
                     </span>
+                    <EscalationMarker escalation={c.activeEscalation} />
+                    <CategoryChip category={c.category} className="min-w-0 max-w-[120px]" />
                     <PriorityBadge
                       priority={c.priority}
                       className="ml-auto !text-[10px] !px-1.5 !py-0.5"

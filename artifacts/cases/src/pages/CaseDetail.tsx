@@ -24,6 +24,7 @@ import {
 } from "lucide-react";
 import { API, fetchJson } from "@/lib/api";
 import type {
+  CaseCategory,
   CaseContact,
   CaseDetail as CaseDetailType,
   CasePriority,
@@ -47,6 +48,14 @@ import { useMyName } from "@/lib/auth";
 import { useAccess } from "@/lib/useAccess";
 import { caseControls, type CaseControls } from "@cases/access";
 import { ReassignControl } from "@/components/ReassignControl";
+import {
+  CaseHistoryCard,
+  CategoryChip,
+  CategoryField,
+  ClosureInfo,
+  EscalationBar,
+  EscalationMarker,
+} from "@/components/cases/CaseLifecycle";
 import { cn } from "@/lib/cn";
 import { formatDate, formatBytes, formatRelative } from "@/lib/format";
 
@@ -139,11 +148,21 @@ export function CaseDetail() {
   });
 
   const patchCase = useMutation({
-    mutationFn: (body: Partial<{ title: string; description: string; tags: string[]; status: CaseStatus; priority: CasePriority }>) =>
+    mutationFn: (
+      body: Partial<{
+        title: string;
+        description: string;
+        tags: string[];
+        status: CaseStatus;
+        priority: CasePriority;
+        category: CaseCategory | null;
+      }>,
+    ) =>
       fetchJson(API(`/api/cases/${id}`), { method: "PATCH", body: JSON.stringify(body) }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["case", id] });
       qc.invalidateQueries({ queryKey: ["cases"] });
+      qc.invalidateQueries({ queryKey: ["dashboard"] });
     },
   });
 
@@ -181,6 +200,8 @@ export function CaseDetail() {
               priority={c.priority}
               className="!text-[10px] !px-2 !py-0.5 uppercase tracking-wider"
             />
+            <CategoryChip category={c.category} />
+            <EscalationMarker escalation={c.activeEscalation} />
           </div>
           {editing && ctl.edit ? (
             <Input
@@ -210,6 +231,9 @@ export function CaseDetail() {
           {editing ? <Check size={13} /> : <PencilLine size={13} />}
         </button>)}
       </div>
+
+      {/* Escalation (Phase 7): the active one, or Escalate when permitted. */}
+      <EscalationBar caseDetail={c} canEscalate={ctl.escalate} canResolve={ctl.resolveEscalation} />
 
       {/* Tabs */}
       <div className="flex items-center gap-1 border-b border-white/5 overflow-x-auto">
@@ -286,13 +310,15 @@ export function CaseDetail() {
 
         {/* Details sidebar — every tab except the automation workspace. */}
         {tab !== "automations" && (
-          <div className="lg:col-span-1">
+          <div className="lg:col-span-1 space-y-4">
             <DetailsCard
               caseDetail={c}
               controls={ctl}
               onChangeStatus={(s) => patchCase.mutate({ status: s })}
               onChangePriority={(p) => patchCase.mutate({ priority: p })}
+              onChangeCategory={(cat) => patchCase.mutate({ category: cat })}
             />
+            <CaseHistoryCard caseDetail={c} />
           </div>
         )}
       </div>
@@ -475,11 +501,13 @@ function DetailsCard({
   controls,
   onChangeStatus,
   onChangePriority,
+  onChangeCategory,
 }: {
   caseDetail: CaseDetailType;
   controls: CaseControls;
   onChangeStatus: (s: CaseStatus) => void;
   onChangePriority: (p: CasePriority) => void;
+  onChangeCategory: (c: CaseCategory | null) => void;
 }) {
   return (
     <div className="rounded-xl border border-white/8 bg-white/[0.025] p-4 space-y-4">
@@ -512,6 +540,10 @@ function DetailsCard({
           {formatDate(caseDetail.updatedAt, { month: "short", day: "numeric", year: "numeric" })}
         </div>
       </div>
+
+      <ClosureInfo caseDetail={caseDetail} />
+
+      <CategoryField category={caseDetail.category} canEdit={controls.edit} onChange={onChangeCategory} />
 
       {/* Status and priority are edits (cases.edit); read-only otherwise. */}
       {!controls.edit && (

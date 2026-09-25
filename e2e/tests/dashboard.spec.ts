@@ -10,12 +10,12 @@ import { EMAIL, login, logout, testIds } from "./helpers";
  */
 
 const CASE_WIDGETS = [
-  "case-summary", "case-attention", "case-least-recent", "case-breakdown", "case-recent", "case-activity",
-  "case-trend", "calls",
+  "case-summary", "case-attention", "case-escalations", "case-least-recent", "case-breakdown", "case-recent",
+  "case-activity", "case-trend", "calls",
 ];
 const CASE_TEAM_WIDGETS = [
-  "case-summary", "case-attention", "case-least-recent", "case-workload", "case-breakdown", "case-recent",
-  "case-activity", "case-trend", "calls",
+  "case-summary", "case-attention", "case-escalations", "case-least-recent", "case-workload", "case-breakdown",
+  "case-categories", "case-recent", "case-activity", "case-trend", "calls",
 ];
 const COMMS = ["mentions", "conversations"];
 
@@ -30,8 +30,9 @@ const WIDGETS: [keyof typeof EMAIL, string[]][] = [
   [
     "systemOwner",
     [
-      "case-summary", "lead-summary", "people-summary", "case-attention", "case-least-recent", "case-workload",
-      "case-breakdown", "case-recent", "case-activity", "case-trend", "calls", "lead-pipeline", "lead-recent",
+      "case-summary", "lead-summary", "people-summary", "case-attention", "case-escalations", "case-least-recent",
+      "case-workload", "case-breakdown", "case-categories", "case-recent", "case-activity", "case-trend", "calls",
+      "lead-pipeline", "lead-recent",
       "lead-workload", "accounts", "people-distribution", "people-teams", ...COMMS,
     ],
   ],
@@ -184,7 +185,7 @@ test.describe("switching employees", () => {
     await widgetsReady(page);
     const seen: string[] = await page.evaluate(() => [...(window as any).__seenWidgets]);
     expect(seen).toContain("widget-case-summary");
-    for (const stale of ["widget-lead-summary", "widget-people-summary", "widget-case-workload", "widget-accounts"]) {
+    for (const stale of ["widget-lead-summary", "widget-people-summary", "widget-case-workload", "widget-case-categories", "widget-accounts"]) {
       expect(seen).not.toContain(stale);
     }
     expect(await testIds(page, "widget-")).toEqual(WIDGETS[0][1]);

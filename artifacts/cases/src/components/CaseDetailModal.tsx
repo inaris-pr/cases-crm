@@ -39,6 +39,7 @@ import { Input, Label, Select, Textarea } from "@/components/ui/Input";
 import { Button } from "@/components/ui/Button";
 import { Avatar } from "@/components/ui/Avatar";
 import { PriorityBadge } from "@/components/ui/Badge";
+import { CategoryChip, EscalationMarker } from "@/components/cases/CaseLifecycle";
 import { MentionBody, MentionTextarea } from "@/components/MentionInput";
 import { caseControls } from "@cases/access";
 import { useAccess } from "@/lib/useAccess";
@@ -210,7 +211,9 @@ function Inner({ caseId, onClose }: { caseId: number; onClose: () => void }) {
           </span>
           <span>·</span>
           <span>{formatDate(c.createdAt, { month: "short", day: "numeric", year: "numeric" })}</span>
-          <span className="ml-auto">
+          <span className="ml-auto inline-flex items-center gap-1.5">
+            <EscalationMarker escalation={c.activeEscalation} />
+            <CategoryChip category={c.category} className="max-w-[140px]" />
             <PriorityBadge priority={c.priority} className="!text-[10px] !px-1.5 !py-0.5" />
           </span>
         </div>

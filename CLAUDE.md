@@ -37,8 +37,8 @@ Run from `cases-app/`. Requires Node ≥20 and pnpm 9.0.0 (`corepack prepare pnp
 | `pnpm dev:api` | API only |
 | `pnpm dev:web` | Frontend only (proxies /api to :3001) |
 | `pnpm typecheck` | tsc --noEmit across the workspace (API src + tests, web, lib/db, lib/access) — **must stay clean** |
-| `pnpm test` | Vitest + Supertest suite (43 files, 583 tests) — **must stay green** |
-| `pnpm test:e2e` | Playwright RBAC + dashboard browser suite (e2e/, 39 tests; own API + Vite on 3101/5174, temp data) |
+| `pnpm test` | Vitest + Supertest suite (46 files, 614 tests) — **must stay green** |
+| `pnpm test:e2e` | Playwright RBAC, dashboard and case-lifecycle browser suite (e2e/, 47 tests; own API + Vite on 3101/5174, temp data) |
 | `pnpm build` | esbuild bundle for the API, `tsc -b && vite build` for the web |
 | `pnpm api:generate` | Orval regen from the OpenAPI spec — **do not run**; the spec is stale |
 
@@ -148,6 +148,15 @@ it, debounced, after every successful non-GET request.
   support stays out (see the deferred list in CLAUDE_HANDOFF.md).
   "Last activity" is derived (`src/caseActivity.ts`) and never written to
   the Case.
+- **Case category, priority and escalation are separate (Phase 7)**. A
+  status change goes ONLY through `changeCaseStatus` (`src/caseLifecycle.ts`)
+  so the append-only history, `closedAt` and reopen stay correct; never set
+  `Case.status` directly. `closedAt` is never inferred (legacy completed
+  Cases keep `null`). Escalate = `cases.work`, resolve = `cases.edit`, the
+  actor is always the session. New Case fields must be optional/nullable
+  and filled in `normalizeLoaded()` — no schema bump or migration unless
+  unavoidable (and then stop `pnpm dev` first: hot reload must never run a
+  migration). Details: CLAUDE_HANDOFF.md §2 "Case lifecycle".
 - **`lib/access` is the single source of access rules** (Phase 2): role keys,
   the permission catalog, own/team/all scopes, role bundles, Account field
   groups with sensitive-read rules, Settings/Insights permissions, the
@@ -198,7 +207,7 @@ it, debounced, after every successful non-GET request.
 ## Tests
 
 `pnpm test` from the root, or `pnpm --filter @cases/api-server test`.
-Vitest + Supertest, in `artifacts/api-server/test/` — 43 files, 583 tests.
+Vitest + Supertest, in `artifacts/api-server/test/` — 46 files, 614 tests.
 
 - **Every request needs a session.** `test/helpers/app.ts` logs in through the
   real endpoint: `asMe` is Iris's session cookie, `loginAs(email)` returns

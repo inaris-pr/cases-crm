@@ -31,6 +31,8 @@ const ACCESS: [string, string, Access][] = [
   ["POST", "/cases", ["cases.create"]],
   ["GET", "/cases/:id", ["cases.view"]],
   ["PATCH", "/cases/:id", ["cases.edit"]],
+  ["POST", "/cases/:id/escalations", ["cases.work"]],
+  ["POST", "/cases/:id/escalations/:escalationId/resolve", ["cases.edit"]],
   ["GET", "/accounts", ["accounts.view"]],
   ["POST", "/accounts", ["accounts.create"]],
   ["GET", "/accounts/:id", ["accounts.view"]],
@@ -184,6 +186,8 @@ add("GET", "/cases", () => "/cases");
 add("POST", "/cases", () => "/cases", () => ({ title: "Role test", accountId: 1 }));
 add("GET", "/cases/:id", () => "/cases/1");
 add("PATCH", "/cases/:id", () => "/cases/1", () => ({ description: "role test" }));
+add("POST", "/cases/:id/escalations", () => "/cases/1/escalations", () => ({ reason: "other" }));
+add("POST", "/cases/:id/escalations/:escalationId/resolve", () => "/cases/1/escalations/999999/resolve");
 add("GET", "/accounts", () => "/accounts");
 add("POST", "/accounts", () => "/accounts", () => ({ name: "Role Test LLC" }));
 add("GET", "/accounts/:id", () => "/accounts/1");

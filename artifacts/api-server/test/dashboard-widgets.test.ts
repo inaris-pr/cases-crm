@@ -19,24 +19,24 @@ import { DEMO_EMAIL_FOR_ROLE } from "./helpers/roles";
  */
 const EXPECTED: Record<string, string[]> = {
   csr: [
-    "case-summary", "case-attention", "case-least-recent", "case-breakdown", "case-recent", "case-activity",
-    "case-trend", "calls", "mentions", "conversations",
+    "case-summary", "case-attention", "case-escalations", "case-least-recent", "case-breakdown", "case-recent",
+    "case-activity", "case-trend", "calls", "mentions", "conversations",
   ],
   csr_supervisor: [
-    "case-summary", "case-attention", "case-least-recent", "case-workload", "case-breakdown", "case-recent",
-    "case-activity", "case-trend", "calls", "mentions", "conversations",
+    "case-summary", "case-attention", "case-escalations", "case-least-recent", "case-workload", "case-breakdown",
+    "case-categories", "case-recent", "case-activity", "case-trend", "calls", "mentions", "conversations",
   ],
   business_advisor: ["lead-summary", "lead-pipeline", "lead-recent", "accounts", "mentions", "conversations"],
   business_advisor_supervisor: [
     "lead-summary", "lead-pipeline", "lead-recent", "lead-workload", "accounts", "mentions", "conversations",
   ],
   operations_admin: [
-    "case-summary", "case-attention", "case-least-recent", "case-breakdown", "case-recent", "case-activity",
-    "case-trend", "calls", "mentions", "conversations",
+    "case-summary", "case-attention", "case-escalations", "case-least-recent", "case-breakdown", "case-recent",
+    "case-activity", "case-trend", "calls", "mentions", "conversations",
   ],
   operations_admin_supervisor: [
-    "case-summary", "case-attention", "case-least-recent", "case-workload", "case-breakdown", "case-recent",
-    "case-activity", "case-trend", "calls", "mentions", "conversations",
+    "case-summary", "case-attention", "case-escalations", "case-least-recent", "case-workload", "case-breakdown",
+    "case-categories", "case-recent", "case-activity", "case-trend", "calls", "mentions", "conversations",
   ],
   hr: ["people-summary", "people-distribution", "people-teams", "mentions", "conversations"],
   system_owner: [...DASHBOARD_WIDGET_IDS],
@@ -98,6 +98,7 @@ describe("dashboard widgets by role", () => {
       const ids = visibleDashboardWidgets(p.permissions);
       expect(body.cases?.workload !== undefined).toBe(ids.includes("case-workload"));
       expect(body.leads?.workload !== undefined).toBe(ids.includes("lead-workload"));
+      expect(body.cases?.byCategory !== undefined).toBe(ids.includes("case-categories"));
     }
   });
 

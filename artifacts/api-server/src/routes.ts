@@ -36,6 +36,18 @@ import {
 } from "./auth/sessions.js";
 import { loginThrottle } from "./auth/throttle.js";
 import { buildDashboard } from "./dashboard.js";
+import { CASE_CATEGORIES, ESCALATION_REASONS } from "./caseMeta.js";
+import {
+  activeEscalationOf,
+  activelyEscalatedCaseIds,
+  changeCaseStatus,
+  escalateCase,
+  escalationsOf,
+  recordClosedAtCreation,
+  resolutionOf,
+  resolveEscalation,
+  statusHistory,
+} from "./caseLifecycle.js";
 import {
   store,
   seed,
@@ -92,6 +104,8 @@ const idParam = z.object({ id: z.coerce.number().int().positive() });
 
 const caseStatus = z.enum(["intake", "review", "in_progress", "waiting", "completed"]);
 const casePriority = z.enum(["low", "medium", "high", "critical"]);
+const caseCategory = z.enum(CASE_CATEGORIES);
+const escalationReason = z.enum(ESCALATION_REASONS);
 const taskStatus = z.enum(["pending", "in_progress", "completed"]);
 const docType = z.enum(["contract", "invoice", "report", "identity", "other"]);
 const conversationType = z.enum(["dm", "group"]);
@@ -213,7 +227,16 @@ function caseWithRelations(c: Case, p: Principal) {
     : null;
   // Include legacy `customerId` (= accountId) so older list/board pages and
   // the New Case modal keep working without simultaneous changes.
-  return { ...c, customerId: c.accountId, account, primaryContact, customer };
+  // `activeEscalation` (Phase 7) travels only with the Case itself, i.e. only
+  // to employees who may view this Case.
+  return {
+    ...c,
+    customerId: c.accountId,
+    account,
+    primaryContact,
+    customer,
+    activeEscalation: activeEscalationOf(c.id),
+  };
 }
 
 /**
@@ -433,11 +456,23 @@ export function buildApiRouter(): Router {
           assigneeUserId: z.coerce.number().int().positive().optional(),
           accountId: z.coerce.number().int().optional(),
           contactId: z.coerce.number().int().optional(),
+          // Phase 7: a category key, or "uncategorized" for null.
+          category: z.union([caseCategory, z.literal("uncategorized")]).optional(),
+          // Phase 7: "true" = has an unresolved escalation, "false" = has none.
+          escalated: z.enum(["true", "false"]).optional(),
         })
         .parse(req.query);
 
       const p = principalOf(req);
       let rows = viewableCases(p);
+      if (q.category) {
+        const want = q.category === "uncategorized" ? null : q.category;
+        rows = rows.filter((c) => c.category === want);
+      }
+      if (q.escalated) {
+        const escalated = activelyEscalatedCaseIds();
+        rows = rows.filter((c) => escalated.has(c.id) === (q.escalated === "true"));
+      }
       if (q.assigneeUserId) rows = rows.filter((c) => c.ownerUserId === q.assigneeUserId);
       if (q.assignee) rows = rows.filter((c) => ownerNamed(c.ownerUserId, c.ownerName, q.assignee!));
       if (q.status) rows = rows.filter((c) => c.status === q.status);
@@ -492,6 +527,8 @@ export function buildApiRouter(): Router {
           priority: casePriority.default("medium"),
           description: z.string().optional().default(""),
           tags: z.array(z.string()).optional().default([]),
+          // Optional in Phase 7; null/omitted = uncategorized.
+          category: caseCategory.nullable().optional(),
         })
         .parse(req.body);
 
@@ -536,8 +573,14 @@ export function buildApiRouter(): Router {
         ownerUserId: meId,
         createdAt: now,
         updatedAt: now,
+        category: body.category ?? null,
+        closedAt: null,
+        closedByUserId: null,
+        closedByName: null,
       };
       store.cases.push(created);
+      // Created already closed: its creator closed it, now.
+      recordClosedAtCreation(created, requireAuth(req).user);
       res.status(201).json(caseWithRelations(created, p));
     }),
   );
@@ -553,6 +596,11 @@ export function buildApiRouter(): Router {
         ...caseWithRelations(c, principalOf(req)),
         tasks: store.tasks.filter((t) => t.caseId === id),
         documents: store.documents.filter((d) => d.caseId === id),
+        // Phase 7: recorded status changes (oldest first), every escalation
+        // (oldest first), and resolution time when it can be measured.
+        statusHistory: statusHistory(id),
+        escalations: escalationsOf(id),
+        resolution: resolutionOf(c),
       });
     }),
   );
@@ -572,6 +620,8 @@ export function buildApiRouter(): Router {
           accountId: z.number().int().positive().optional(),
           // null clears the primary contact; omitted leaves it unchanged.
           primaryContactId: z.number().int().positive().nullable().optional(),
+          // Phase 7: null = uncategorized.
+          category: caseCategory.nullable().optional(),
         })
         .parse(req.body);
       const c = findCaseFor(req, id);
@@ -620,8 +670,56 @@ export function buildApiRouter(): Router {
         }
       }
 
-      Object.assign(c, body, { updatedAt: new Date().toISOString() });
+      // Status goes through the lifecycle (history, closedAt, reopen) with the
+      // session's employee as the actor; everything else is a plain field.
+      const { status, ...fields } = body;
+      const now = new Date().toISOString();
+      Object.assign(c, fields, { updatedAt: now });
+      if (status !== undefined) changeCaseStatus(c, status, requireAuth(req).user, now);
       res.json(caseWithRelations(c, p));
+    }),
+  );
+
+  // ── Escalations (Phase 7) ──────────────────────────────────────────────────
+  // Manual only. Escalating needs cases.work on the Case; resolving needs
+  // cases.edit on it. The author is always the session's employee.
+  r.post(
+    "/cases/:id/escalations",
+    allow("cases.work"),
+    asyncHandler(async (req, res) => {
+      const { id } = idParam.parse(req.params);
+      const body = z
+        .object({
+          reason: escalationReason,
+          note: z.string().trim().max(2000).optional().nullable(),
+        })
+        .parse(req.body);
+      const c = findCaseFor(req, id);
+      if (!c) return res.status(404).json({ error: "not_found" });
+      if (!canOn(principalOf(req), "cases.work", c.ownerUserId)) return outOfScope(res, "cases.work");
+      const result = escalateCase(c, body.reason, body.note ? body.note : null, requireAuth(req).user, new Date().toISOString());
+      if (result === "already_escalated") {
+        return res.status(409).json({ error: "already_escalated", escalation: activeEscalationOf(c.id) });
+      }
+      res.status(201).json(result);
+    }),
+  );
+
+  r.post(
+    "/cases/:id/escalations/:escalationId/resolve",
+    allow("cases.edit"),
+    asyncHandler(async (req, res) => {
+      const { id, escalationId } = z
+        .object({ id: z.coerce.number().int().positive(), escalationId: z.coerce.number().int().positive() })
+        .parse(req.params);
+      const c = findCaseFor(req, id);
+      if (!c) return res.status(404).json({ error: "not_found" });
+      if (!canOn(principalOf(req), "cases.edit", c.ownerUserId)) return outOfScope(res, "cases.edit");
+      const e = store.caseEscalations.find((x) => x.id === escalationId && x.caseId === id);
+      if (!e) return res.status(404).json({ error: "escalation_not_found" });
+      const result = resolveEscalation(e, requireAuth(req).user, new Date().toISOString());
+      if (result === "already_resolved") return res.status(409).json({ error: "already_resolved" });
+      res.json(result);
     }),
   );
 
@@ -1310,6 +1408,10 @@ export function buildApiRouter(): Router {
         ownerUserId: meId,
           createdAt: now,
           updatedAt: now,
+          category: null,
+          closedAt: null,
+          closedByUserId: null,
+          closedByName: null,
         };
         store.cases.push(createdCase);
       }

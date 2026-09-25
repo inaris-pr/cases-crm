@@ -9,8 +9,9 @@ file in the same change.
 identity foundation** (and its browser-login fix) and **RBAC Phase 2 —
 permission core**, **RBAC Phase 3 — backend enforcement** and **RBAC Phase 4 —
 stable ownership ids and real team scope** and **RBAC Phase 5 — role-aware
-frontend** and **RBAC Phase 6 — personalized role dashboards**. Typecheck
-clean; **583 tests across 43 files**, all passing; Playwright 39 tests. Default branch `main`, pushed to the private
+frontend** and **RBAC Phase 6 — personalized role dashboards** and **Phase 7 —
+case lifecycle, categories & escalations**. Typecheck clean; **614 tests
+across 46 files**, all passing; Playwright 47 tests. Default branch `main`, pushed to the private
 remote `inaris-pr/cases-crm`.
 
 ---
@@ -46,6 +47,7 @@ Since recovery (all 2026-09-22/23, see CHANGELOG.md):
 | RBAC Phase 4 | Stable owner/author ids (store v2 migration), real team scope from stored teams, reassignment endpoints (§2 Ownership) |
 | RBAC Phase 5 | Role-aware frontend: sidebar, Records tabs, route guard, section and control gating, reassign UI, interim Dashboard; Playwright RBAC suite in CI (§2 Frontend access) |
 | RBAC Phase 6 | Personalized role dashboards: `GET /api/dashboard` with permission-gated, scope-computed sections; widget registry by permission; derived case last activity (§2 Dashboards) |
+| Phase 7 | Case categories, status history with real closedAt / reopen, resolution time, manual escalations with history; filters and dashboard integration; no migration (§2 Case lifecycle) |
 
 ---
 
@@ -269,7 +271,7 @@ same lib/access rules the API enforces (`@cases/access`, a Vite alias):
   (active, can view that record type, inside the caller's assign scope)
   and sends `{ ownerUserId }`.
 - **Dashboard**: replaced by the Phase 6 dashboards (below).
-- **Browser tests**: `e2e/` (Playwright, 39 tests, `pnpm test:e2e`) starts its
+- **Browser tests**: `e2e/` (Playwright, 47 tests, `pnpm test:e2e`) starts its
   own API (fresh temp store via `CASES_DATA_DIR`) and Vite on 3101/5174;
   CI job `e2e`. e2e/ is outside the pnpm workspace; `@playwright/test` is
   pinned exactly in `e2e/package.json` and locked by `e2e/package-lock.json`
@@ -337,6 +339,75 @@ role name — so an employee with several roles sees the union.
   headcount history — need HR records (hire/termination dates); leaderboard
   (`metrics.sales.leaderboard`) — needs reliable conversions.
 
+### Case lifecycle, categories & escalations (Phase 7)
+
+Category, priority and escalation are separate concepts; none is derived
+from another and nothing is classified or escalated automatically.
+- **Category** (`Case.category`, optional, `null` = uncategorized): one
+  primary category from `src/caseMeta.ts` — `general` General / Other,
+  `formation_filing` Formation / Filing, `compliance` Compliance,
+  `registered_agent` Registered Agent, `ein_tax` EIN / Tax,
+  `billing_refund` Billing / Refund Request, `customer_dispute` Customer
+  Dispute (a service dispute or complaint — NOT a card chargeback),
+  `filing_correction` Filing Correction / Incorrect Filing,
+  `partner_issue` Partner Issue, `account_portal` Account / Portal. Set on
+  New Case (all three contexts) or edited on Case Detail with `cases.edit`.
+  Tags stay free-form. Existing Cases are never auto-categorized. The web
+  app mirrors the list in `cases/src/lib/caseMeta.ts`
+  (`test/case-meta.test.ts` keeps them identical).
+- **Priority**: unchanged (`low|medium|high|critical`).
+- **Terminal status**: only the existing `completed` (shown as "Closed").
+- **Status history** (`store.caseStatusEvents`, append-only): every status
+  change from Phase 7 on records `fromStatus`, `toStatus`, `kind`
+  (`status_change` | `closed` | `reopened`), `changedAt`,
+  `changedByUserId` (the session's employee — never the body) and
+  `changedByName` (label as of the change). A no-op status update records
+  nothing. Written only through `changeCaseStatus` (`src/caseLifecycle.ts`),
+  called by `PATCH /cases/:id` (Case Detail, board drag, board modal).
+- **closedAt** (+ `closedByUserId`, `closedByName`): set when a Case moves
+  non-terminal → `completed` (or is created as `completed`: closed at
+  creation by its creator); cleared on reopen; set again on the next close.
+  Each closure stays in the history. **Legacy**: Cases already completed
+  before Phase 7 have `closedAt: null` — the UI says "Closed date
+  unavailable" — and it is never taken from `updatedAt`.
+- **Resolution time** (`resolution` on `GET /cases/:id`), only when the Case
+  is closed AND `closedAt` is known: `totalMs = closedAt − createdAt`
+  (calendar time, creation → current closure; includes any reopened
+  period). When the Case was reopened and closed again, `latestCycleMs` =
+  last reopen → current closure and `closures` counts closures. No business
+  hours, no waiting-time subtraction, no SLA targets.
+- **Escalations** (`store.caseEscalations`, append-only): `reason`
+  (`refund_request`, `customer_dispute`, `incorrect_filing`,
+  `partner_issue`, `deadline_risk`, `customer_impact`, `other`), optional
+  `note`, `escalatedAt/ByUserId/ByName`, `resolvedAt/ByUserId/ByName`. At
+  most one unresolved per Case (409 `already_escalated`); resolved rows stay
+  as history; a Case can be escalated again later, including a closed Case
+  (e.g. a dispute after completion). Escalating does not change priority,
+  status or `updatedAt`.
+  - Raise: `POST /cases/:id/escalations` — `cases.work` on the Case.
+  - Resolve: `POST /cases/:id/escalations/:escalationId/resolve` —
+    `cases.edit` on the Case. (No new permission; `caseControls` exposes
+    `escalate` / `resolveEscalation`.)
+  - `activeEscalation` travels with the Case (list and detail);
+    `GET /cases/:id` adds `statusHistory`, `escalations`, `resolution`.
+    None of it reaches employees without case access.
+- **Filters**: `GET /cases?category=<key>|uncategorized` and
+  `?escalated=true|false`, composable with the existing filters; order
+  unchanged (Last Modified).
+- **Dashboard**: `cases.summary.activeEscalations`, `cases.escalated`,
+  `cases.recentEscalations`, `workload[].escalated`, and — at team/all
+  scope — `cases.byCategory` (open Cases). "Needs attention" = Cases with an
+  unresolved escalation (first) plus open Cases that are high/critical or
+  have overdue tasks. Widgets `case-escalations` (all case roles) and
+  `case-categories` (team/all).
+- **Storage**: additive, no schema version and no migration. Missing Case
+  fields are filled with `null` and missing collections with `[]` in memory
+  on load (`normalizeLoaded`); the file is only written by the next ordinary
+  save. Store stays at schema v2.
+- **Deferred**: automatic escalation, SLA deadlines/timers, business-hours
+  calendars, state-specific filing timelines, external alerts, chargebacks,
+  AI categorization.
+
 ### Domain model
 
 - **Account** — a company; ~46 Salesforce-style entity-formation fields.
@@ -351,7 +422,10 @@ role name — so an employee with several roles sees the union.
 - **Case** — `accountId` (required) and `primaryContactId` (nullable). No
   email/phone of its own — those are read through the contact. Status
   `intake|review|in_progress|waiting|completed`; priority
-  `low|medium|high|critical`; tags; owner; `createdAt`, `updatedAt`.
+  `low|medium|high|critical`; tags; owner; `createdAt`, `updatedAt`;
+  Phase 7: `category`, `closedAt`/`closedByUserId`/`closedByName`.
+- Around a case (Phase 7): **CaseStatusEvent** (status history) and
+  **CaseEscalation** (§2 Case lifecycle).
 - Around a case: **Task**, **Doc**, **CaseInteraction**, **CaseThreadEntry**,
   **Mention**.
 - **Automation** — a saved visual workflow graph, scoped `case` or `global`
@@ -556,7 +630,7 @@ alias for `accountId`.
 
 ### Test coverage
 
-`pnpm test`: Vitest + Supertest, **43 files / 583 tests** in
+`pnpm test`: Vitest + Supertest, **46 files / 614 tests** in
 `artifacts/api-server/test/`. Covers stable ownership (v2 migration,
 refusal on unmapped/ambiguous names, rename safety, spoofing, history),
 team scope and reassignment, authorization (every route declared,

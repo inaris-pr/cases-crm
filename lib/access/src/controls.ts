@@ -64,10 +64,14 @@ export function createActions(perms: EffectivePermissions): CreateActions {
 // ── Per-record controls ─────────────────────────────────────────────────────
 
 export interface CaseControls {
-  /** Title, description, tags, status, priority, account/contact. */
+  /** Title, description, tags, category, status, priority, account/contact. */
   edit: boolean;
   /** Log calls, comment, tasks, documents. */
   work: boolean;
+  /** Raise an escalation (Phase 7): cases.work on this case. */
+  escalate: boolean;
+  /** Resolve this case's escalation (Phase 7): cases.edit on this case. */
+  resolveEscalation: boolean;
   reassign: boolean;
   /** Create/edit/customize this case's own automations. */
   editAutomations: boolean;
@@ -76,9 +80,13 @@ export interface CaseControls {
 }
 
 export function caseControls(ctx: AccessContext, c: Owned): CaseControls {
+  const edit = canOnOwner(ctx, "cases.edit", c.ownerUserId);
+  const work = canOnOwner(ctx, "cases.work", c.ownerUserId);
   return {
-    edit: canOnOwner(ctx, "cases.edit", c.ownerUserId),
-    work: canOnOwner(ctx, "cases.work", c.ownerUserId),
+    edit,
+    work,
+    escalate: work,
+    resolveEscalation: edit,
     reassign: canOnOwner(ctx, "cases.assign", c.ownerUserId),
     editAutomations: canOnOwner(ctx, "automations.edit", c.ownerUserId),
     manageGlobalAutomations: can(ctx.permissions, "automations.manage_global"),

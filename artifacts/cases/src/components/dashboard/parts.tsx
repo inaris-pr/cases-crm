@@ -117,7 +117,7 @@ export function StatCard({
 }
 
 /** Stat cards in a responsive row. */
-export function StatRow({ children, cols = 4 }: { children: ReactNode; cols?: 3 | 4 | 5 }) {
+export function StatRow({ children, cols = 4 }: { children: ReactNode; cols?: 3 | 4 | 5 | 6 }) {
   return (
     <div
       className={cn(
@@ -125,6 +125,7 @@ export function StatRow({ children, cols = 4 }: { children: ReactNode; cols?: 3 
         cols === 3 && "lg:grid-cols-3",
         cols === 4 && "lg:grid-cols-4",
         cols === 5 && "md:grid-cols-3 xl:grid-cols-5",
+        cols === 6 && "md:grid-cols-3 xl:grid-cols-6",
       )}
     >
       {children}

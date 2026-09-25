@@ -18,6 +18,10 @@
  *   accounts       accounts.view + metrics.sales (scope: metrics.sales, by account owner)
  *   people         metrics.people + people.view (employees and teams only — no customer data)
  *   communication  messages.use                 (your own mentions and conversations)
+ *
+ * Phase 7 adds to `cases`: unresolved escalations (count, list, recent
+ * activity, per-employee), escalations first in "Needs attention", and open
+ * Cases by category at team/all scope.
  */
 import {
   DEPARTMENT_LABELS,
@@ -33,6 +37,7 @@ import {
 } from "./access.js";
 import { canOn, ownerInScope, type Principal } from "./auth/authorize.js";
 import { lastActivityIndex, type ActivitySource } from "./caseActivity.js";
+import { CASE_CATEGORIES, type CaseCategory, type EscalationReason } from "./caseMeta.js";
 import type {
   Case,
   CasePriority,
@@ -70,8 +75,12 @@ export interface DashboardCaseItem {
   overdueTasks: number;
   lastActivityAt: string;
   lastActivitySource: ActivitySource;
+  /** Phase 7: the Case's category (null = uncategorized). */
+  category: CaseCategory | null;
+  /** Phase 7: the unresolved escalation, if any. */
+  escalation: { id: number; reason: EscalationReason; escalatedAt: string; escalatedByName: string } | null;
   /** Why the case is in the attention list. */
-  reasons?: ("critical_priority" | "high_priority" | "overdue_tasks")[];
+  reasons?: ("escalated" | "critical_priority" | "high_priority" | "overdue_tasks")[];
 }
 
 export interface CaseWorkloadRow {
@@ -83,11 +92,21 @@ export interface CaseWorkloadRow {
   /** Tasks have no assignee: counted on the owner of their Case. */
   openTasks: number;
   overdueTasks: number;
+  /** Phase 7: this employee's Cases with an unresolved escalation. */
+  escalated: number;
 }
 
 export interface DashboardCases {
   scope: Scope;
-  summary: { open: number; completed: number; urgentOpen: number; openTasks: number; overdueTasks: number };
+  summary: {
+    open: number;
+    completed: number;
+    urgentOpen: number;
+    openTasks: number;
+    overdueTasks: number;
+    /** Phase 7: Cases in scope with an unresolved escalation (any status). */
+    activeEscalations: number;
+  };
   byStatus: { status: CaseStatus; count: number }[];
   /** Open cases only. */
   byPriority: { priority: CasePriority; count: number }[];
@@ -106,6 +125,20 @@ export interface DashboardCases {
   }[];
   /** Per employee — team and all scope only. */
   workload?: CaseWorkloadRow[];
+  /** Phase 7: Cases in scope with an unresolved escalation, longest-waiting first. */
+  escalated: DashboardCaseItem[];
+  /** Phase 7: escalations raised or resolved on Cases in scope, newest first. */
+  recentEscalations: {
+    id: number;
+    caseId: number;
+    caseNumber: string;
+    event: "escalated" | "resolved";
+    reason: EscalationReason;
+    at: string;
+    byName: string;
+  }[];
+  /** Phase 7: OPEN Cases by category (null = uncategorized) — team and all scope only. */
+  byCategory?: { category: CaseCategory | null; count: number }[];
 }
 
 export interface DashboardCalls {
@@ -228,8 +261,13 @@ function casesSection(p: Principal, store: Store, now: Date): DashboardCases | u
     if (isOverdue(t, nowMs)) e.overdue++;
     tasksByCase.set(t.caseId, e);
   }
+  // Unresolved escalations on Cases in scope (read from the store passed in).
+  const activeEsc = new Map(
+    store.caseEscalations.filter((e) => e.resolvedAt === null && ids.has(e.caseId)).map((e) => [e.caseId, e]),
+  );
   const item = (c: Case): DashboardCaseItem => {
     const tk = tasksByCase.get(c.id) ?? { open: 0, overdue: 0 };
+    const esc = activeEsc.get(c.id);
     const la = activity.get(c.id) ?? { at: c.updatedAt, source: "updated" as const };
     return {
       id: c.id,
@@ -243,6 +281,15 @@ function casesSection(p: Principal, store: Store, now: Date): DashboardCases | u
       overdueTasks: tk.overdue,
       lastActivityAt: la.at,
       lastActivitySource: la.source,
+      category: c.category ?? null,
+      escalation: esc
+        ? {
+            id: esc.id,
+            reason: esc.reason,
+            escalatedAt: esc.escalatedAt,
+            escalatedByName: userName(store, esc.escalatedByUserId, esc.escalatedByName),
+          }
+        : null,
     };
   };
   const open = cases.filter(OPEN_CASE);
@@ -250,17 +297,28 @@ function casesSection(p: Principal, store: Store, now: Date): DashboardCases | u
   const byLast = (a: DashboardCaseItem, b: DashboardCaseItem) => Date.parse(a.lastActivityAt) - Date.parse(b.lastActivityAt);
   const prioRank: Record<CasePriority, number> = { critical: 0, high: 1, medium: 2, low: 3 };
 
-  const attention = items
-    .filter((i) => URGENT(i.priority) || i.overdueTasks > 0)
+  // Real signals only: an unresolved escalation (on any Case — a closed Case
+  // can be escalated, e.g. a dispute after completion), or an OPEN Case that
+  // is high/critical or has overdue tasks. Escalated Cases come first.
+  const escalatedItems = cases.filter((c) => activeEsc.has(c.id)).map(item);
+  const attention = [...items.filter((i) => !i.escalation), ...escalatedItems]
+    .filter((i) => i.escalation || URGENT(i.priority) || i.overdueTasks > 0)
     .map((i) => ({
       ...i,
       reasons: [
+        ...(i.escalation ? (["escalated"] as const) : []),
         ...(i.priority === "critical" ? (["critical_priority"] as const) : []),
         ...(i.priority === "high" ? (["high_priority"] as const) : []),
         ...(i.overdueTasks > 0 ? (["overdue_tasks"] as const) : []),
       ],
     }))
-    .sort((a, b) => prioRank[a.priority] - prioRank[b.priority] || b.overdueTasks - a.overdueTasks || byLast(a, b))
+    .sort(
+      (a, b) =>
+        Number(!!b.escalation) - Number(!!a.escalation) ||
+        prioRank[a.priority] - prioRank[b.priority] ||
+        b.overdueTasks - a.overdueTasks ||
+        byLast(a, b),
+    )
     .slice(0, LIST);
 
   const days: DashboardCases["trend30"] = [];
@@ -301,6 +359,7 @@ function casesSection(p: Principal, store: Store, now: Date): DashboardCases | u
       urgentOpen: open.filter((c) => URGENT(c.priority)).length,
       openTasks: tasks.filter((t) => t.status !== "completed").length,
       overdueTasks: tasks.filter((t) => isOverdue(t, nowMs)).length,
+      activeEscalations: activeEsc.size,
     },
     byStatus: CASE_STATUSES.map((status) => ({ status, count: cases.filter((c) => c.status === status).length })),
     byPriority: CASE_PRIORITIES.map((priority) => ({ priority, count: open.filter((c) => c.priority === priority).length })),
@@ -309,9 +368,44 @@ function casesSection(p: Principal, store: Store, now: Date): DashboardCases | u
     attention,
     leastRecentlyWorked: [...items].sort(byLast).slice(0, LIST),
     recentActivity,
+    escalated: escalatedItems
+      .sort((a, b) => Date.parse(a.escalation!.escalatedAt) - Date.parse(b.escalation!.escalatedAt))
+      .slice(0, LIST),
+    recentEscalations: store.caseEscalations
+      .filter((e) => ids.has(e.caseId))
+      .flatMap((e) => [
+        {
+          id: e.id,
+          caseId: e.caseId,
+          caseNumber: caseNumber.get(e.caseId) ?? "",
+          event: "escalated" as const,
+          reason: e.reason,
+          at: e.escalatedAt,
+          byName: userName(store, e.escalatedByUserId, e.escalatedByName),
+        },
+        ...(e.resolvedAt
+          ? [
+              {
+                id: e.id,
+                caseId: e.caseId,
+                caseNumber: caseNumber.get(e.caseId) ?? "",
+                event: "resolved" as const,
+                reason: e.reason,
+                at: e.resolvedAt,
+                byName: userName(store, e.resolvedByUserId, e.resolvedByName ?? "Unknown"),
+              },
+            ]
+          : []),
+      ])
+      .sort((a, b) => Date.parse(b.at) - Date.parse(a.at))
+      .slice(0, 8),
   };
 
   if (scope !== "own") {
+    section.byCategory = [...CASE_CATEGORIES, null].map((category) => ({
+      category,
+      count: open.filter((c) => (c.category ?? null) === category).length,
+    }));
     const people = workloadPeople(p, store, scope, "cases.view", cases.map((c) => c.ownerUserId));
     const row = (userId: number | null, name: string, active: boolean): CaseWorkloadRow => {
       const mine = cases.filter((c) => c.ownerUserId === userId);
@@ -325,6 +419,7 @@ function casesSection(p: Principal, store: Store, now: Date): DashboardCases | u
         urgentCases: mineOpen.filter((c) => URGENT(c.priority)).length,
         openTasks: myTasks.filter((t) => t.status !== "completed").length,
         overdueTasks: myTasks.filter((t) => isOverdue(t, nowMs)).length,
+        escalated: mine.filter((c) => activeEsc.has(c.id)).length,
       };
     };
     section.workload = people.map((u) => row(u.id, u.name, u.active));

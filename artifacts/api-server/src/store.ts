@@ -11,6 +11,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { hashPasswordSync } from "./auth/password.js";
 import { DEMO_PASSWORD, type DepartmentKey, type RoleKey } from "./auth/identity.js";
+import type { CaseCategory, EscalationReason } from "./caseMeta.js";
 import {
   CURRENT_SCHEMA_VERSION,
   MigrationAbortError,
@@ -190,6 +191,56 @@ export interface Case {
   ownerUserId: number | null;        // the owning employee — authoritative (Phase 4)
   createdAt: string;
   updatedAt: string;
+  // ── Phase 7 (additive; filled with null on load when absent) ──────────
+  /** One primary category, or null = uncategorized (never guessed). */
+  category: CaseCategory | null;
+  /**
+   * When the Case entered a terminal status in its CURRENT closure, and who
+   * did it. Set only by a status change recorded after Phase 7; cleared on
+   * reopen. Null for open Cases AND for Cases that were already closed
+   * before Phase 7 — their real closing time is unknown and is never
+   * inferred from updatedAt.
+   */
+  closedAt: string | null;
+  closedByUserId: number | null;
+  closedByName: string | null;
+}
+
+/**
+ * One recorded status change of a Case (append-only; Phase 7). Recorded for
+ * every status change from Phase 7 on — nothing before that is fabricated.
+ *   closed      non-terminal → terminal (or created directly as terminal:
+ *               fromStatus null)
+ *   reopened    terminal → non-terminal
+ *   status_change  any other change
+ */
+export interface CaseStatusEvent {
+  id: number;
+  caseId: number;
+  kind: "status_change" | "closed" | "reopened";
+  fromStatus: CaseStatus | null;
+  toStatus: CaseStatus;
+  changedAt: string;
+  changedByUserId: number | null;   // authoritative (the session's employee)
+  changedByName: string;            // label as of the change; never rewritten
+}
+
+/**
+ * A manual escalation of a Case (Phase 7). Append-only: resolving fills the
+ * resolved* fields and the row stays as history. At most one unresolved
+ * escalation per Case.
+ */
+export interface CaseEscalation {
+  id: number;
+  caseId: number;
+  reason: EscalationReason;
+  note: string | null;
+  escalatedAt: string;
+  escalatedByUserId: number | null;
+  escalatedByName: string;
+  resolvedAt: string | null;
+  resolvedByUserId: number | null;
+  resolvedByName: string | null;
 }
 
 export interface Task {
@@ -411,6 +462,8 @@ export const store = {
   teams: [] as Team[],
   sessions: [] as Session[],
   automations: [] as Automation[],
+  caseStatusEvents: [] as CaseStatusEvent[],
+  caseEscalations: [] as CaseEscalation[],
   /** Schema version of the persisted store; see migrations.ts. */
   meta: { schemaVersion: 0 },
   seq: {
@@ -431,6 +484,8 @@ export const store = {
     team: 0,
     session: 0,
     automation: 0,
+    caseStatusEvent: 0,
+    caseEscalation: 0,
   },
 };
 
@@ -453,6 +508,8 @@ export const nextThreadEntryId = () => nextId("threadEntry");
 export const nextMentionId = () => nextId("mention");
 export const nextUserId = () => nextId("user");
 export const nextAutomationId = () => nextId("automation");
+export const nextCaseStatusEventId = () => nextId("caseStatusEvent");
+export const nextCaseEscalationId = () => nextId("caseEscalation");
 export const nextTeamId = () => nextId("team");
 export const nextSessionId = () => nextId("session");
 
@@ -568,6 +625,14 @@ export function makeAccount(
   };
 }
 
+/**
+ * Seed Cases start uncategorized, and the seeded completed Case has no known
+ * closing time — exactly like a real Case closed before Phase 7.
+ */
+function withPhase7Defaults(rows: Omit<Case, "category" | "closedAt" | "closedByUserId" | "closedByName">[]): Case[] {
+  return rows.map((c) => ({ ...c, category: null, closedAt: null, closedByUserId: null, closedByName: null }));
+}
+
 // ── Load / persist ──────────────────────────────────────────────────────────
 
 /**
@@ -594,6 +659,8 @@ const COLLECTION_SEQ: ReadonlyArray<
   ["teams", "team"],
   ["sessions", "session"],
   ["automations", "automation"],
+  ["caseStatusEvents", "caseStatusEvent"],
+  ["caseEscalations", "caseEscalation"],
 ];
 
 /**
@@ -633,6 +700,18 @@ function normalizeLoaded() {
     if (typeof current !== "number" || !Number.isFinite(current) || current < highestId) {
       store.seq[seqKey] = highestId;
     }
+  }
+
+  // Phase 7 Case fields: a Case saved before them has none. They are
+  // optional in meaning (null = uncategorized / closing time unknown), so
+  // they are filled in memory here — no schema version, no migration, no
+  // write until the next ordinary save. Never inferred from other fields.
+  for (const c of store.cases) {
+    const row = c as Partial<Case> & Case;
+    if (row.category === undefined) row.category = null;
+    if (row.closedAt === undefined) row.closedAt = null;
+    if (row.closedByUserId === undefined) row.closedByUserId = null;
+    if (row.closedByName === undefined) row.closedByName = null;
   }
 
   // caseNumber has no collection of its own — recover it from the case numbers
@@ -1155,7 +1234,7 @@ export function seed() {
   );
 
   // ── Cases (one primary case per account, mirroring the previous seed) ──
-  const cases: Case[] = [
+  const cases: Case[] = withPhase7Defaults([
     // Iris's queue (5 — Helix, Brightline, Patel Holdings, Mendoza, Chen)
     {
       id: nextCaseId(), caseNumber: nextCaseNumber(),
@@ -1311,7 +1390,7 @@ export function seed() {
       tags: ["CA", "form-llc-1", "form-llc-12", "single-member", "franchise-tax-exemption"],
       ownerName: "Sara Mitchell", ownerUserId: null, createdAt: daysAgo(8), updatedAt: daysAgo(1),
     },
-  ];
+  ]);
   store.cases.push(...cases);
   const [c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15] = cases;
 

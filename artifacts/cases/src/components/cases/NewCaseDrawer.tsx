@@ -5,6 +5,7 @@ import { API, fetchJson } from "@/lib/api";
 import type {
   AccountWithCounts,
   Case,
+  CaseCategory,
   CasePriority,
   CaseStatus,
   ContactDetail,
@@ -14,6 +15,7 @@ import type {
 import { Button } from "@/components/ui/Button";
 import { Input, Label, Select, Textarea } from "@/components/ui/Input";
 import { Modal } from "@/components/ui/Modal";
+import { CASE_CATEGORY_OPTIONS } from "@/lib/caseMeta";
 
 /**
  * Where the drawer was opened from. It decides what is locked and what the
@@ -37,6 +39,8 @@ interface FormState {
   primaryContactId: number;
   status: CaseStatus;
   priority: CasePriority;
+  /** Phase 7: optional primary category ("" = uncategorized). */
+  category: CaseCategory | "";
   description: string;
   tags: string;
 }
@@ -47,6 +51,7 @@ const emptyForm = (status: CaseStatus): FormState => ({
   primaryContactId: 0,
   status,
   priority: "medium",
+  category: "",
   description: "",
   tags: "",
 });
@@ -167,6 +172,7 @@ export function NewCaseDrawer({
           ...(primaryContactId > 0 ? { primaryContactId } : {}),
           status: form.status,
           priority: form.priority,
+          ...(form.category ? { category: form.category } : {}),
           description: form.description,
           tags: form.tags
             .split(",")
@@ -367,6 +373,21 @@ export function NewCaseDrawer({
               <option value="critical">Critical</option>
             </Select>
           </div>
+        </div>
+        <div>
+          <Label>Category (optional)</Label>
+          <Select
+            data-testid="new-case-category"
+            value={form.category}
+            onChange={(e) => setForm({ ...form, category: e.target.value as CaseCategory | "" })}
+          >
+            <option value="">Uncategorized</option>
+            {CASE_CATEGORY_OPTIONS.map((o) => (
+              <option key={o.key} value={o.key}>
+                {o.label}
+              </option>
+            ))}
+          </Select>
         </div>
         <div>
           <Label>Description</Label>

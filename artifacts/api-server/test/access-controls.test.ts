@@ -62,16 +62,16 @@ describe("scope evaluator", () => {
 
 describe("case controls", () => {
   it("CSR: works any case, edits and automates only her own, never reassigns", () => {
-    expect(caseControls(DEVON, owned(2))).toEqual({ edit: true, work: true, reassign: false, editAutomations: true, manageGlobalAutomations: false });
-    expect(caseControls(DEVON, owned(3))).toEqual({ edit: false, work: true, reassign: false, editAutomations: false, manageGlobalAutomations: false });
+    expect(caseControls(DEVON, owned(2))).toEqual({ edit: true, work: true, escalate: true, resolveEscalation: true, reassign: false, editAutomations: true, manageGlobalAutomations: false });
+    expect(caseControls(DEVON, owned(3))).toEqual({ edit: false, work: true, escalate: true, resolveEscalation: false, reassign: false, editAutomations: false, manageGlobalAutomations: false });
   });
   it("CSR Supervisor: her team's cases, not others'", () => {
-    expect(caseControls(NADIA, owned(3))).toMatchObject({ edit: true, reassign: true, editAutomations: true });
-    expect(caseControls(NADIA, owned(1))).toMatchObject({ edit: false, work: true, reassign: false });
+    expect(caseControls(NADIA, owned(3))).toMatchObject({ edit: true, resolveEscalation: true, reassign: true, editAutomations: true });
+    expect(caseControls(NADIA, owned(1))).toMatchObject({ edit: false, work: true, escalate: true, resolveEscalation: false, reassign: false });
   });
   it("Admin Supervisor and System Owner", () => {
-    expect(caseControls(RACHEL, owned(2))).toEqual({ edit: true, work: true, reassign: false, editAutomations: true, manageGlobalAutomations: true });
-    expect(caseControls(IRIS, owned(2))).toEqual({ edit: true, work: true, reassign: true, editAutomations: true, manageGlobalAutomations: true });
+    expect(caseControls(RACHEL, owned(2))).toEqual({ edit: true, work: true, escalate: true, resolveEscalation: true, reassign: false, editAutomations: true, manageGlobalAutomations: true });
+    expect(caseControls(IRIS, owned(2))).toEqual({ edit: true, work: true, escalate: true, resolveEscalation: true, reassign: true, editAutomations: true, manageGlobalAutomations: true });
   });
   it("Business Advisor and HR: nothing", () => {
     for (const c of [LEO, TESSA]) {

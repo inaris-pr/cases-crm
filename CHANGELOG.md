@@ -10,8 +10,39 @@ recovered working tree — the project had no repository, so there is no history
 ## [Unreleased]
 
 Everything since the recovery release, 2026-09-22 → 2026-09-24.
-State at the end of this section: typecheck clean, **583 tests in 43 files**;
-Playwright 39 tests.
+State at the end of this section: typecheck clean, **614 tests in 46 files**;
+Playwright 47 tests.
+
+### Added — Phase 7: case lifecycle, categories & escalations (2026-09-24)
+- **Category**: one optional primary category per Case (10 approved keys,
+  e.g. Formation / Filing, EIN / Tax, Customer Dispute — a service dispute,
+  not a chargeback). Chosen on New Case (Records, Account and Client
+  contexts), edited on Case Detail with `cases.edit`, shown as a chip in the
+  table, cards and board, and filterable (`?category=`, incl.
+  `uncategorized`). Existing Cases stay uncategorized — nothing is guessed.
+- **Lifecycle history**: every status change is recorded append-only with
+  the session's employee. Closing (→ Completed) sets `closedAt` and who
+  closed it; reopening clears it and keeps the earlier closure in history;
+  closing again records a new one. Cases completed before Phase 7 show
+  "Closed date unavailable" — never `updatedAt`.
+- **Resolution time** on Case Detail for Cases with a known `closedAt`:
+  creation → current closure (calendar time), plus the latest cycle when
+  reopened. No SLA or business-hours logic.
+- **Escalations**: manual, with a reason (refund request, customer dispute,
+  incorrect filing, partner issue, deadline risk, customer impact, other)
+  and optional note; one active per Case; resolved ones stay in history.
+  Escalate with `cases.work`, resolve with `cases.edit`. Banner and history
+  on Case Detail; "Escalated" marker in table/cards/board; `?escalated=`
+  filter. Priority is unchanged by escalation.
+- **Dashboards**: escalated count, an Escalations widget (supervisors also
+  see recent escalation activity), category breakdown at team/company
+  scope, an Escalated column in workload, and escalations lead "Needs
+  attention". Business Advisors and HR receive none of it.
+- **No migration**: additive nullable fields and new collections, filled in
+  memory on load; store stays at schema v2.
+- Tests: 31 API/unit tests added (lifecycle, categories, escalations,
+  filters, dashboard scope, taxonomy, pre-Phase-7 store load) and 8
+  Playwright tests.
 
 ### Added — RBAC Phase 6: personalized role dashboards (2026-09-24)
 - **`GET /api/dashboard`**: one server-computed response whose sections
