@@ -25,7 +25,11 @@ practice — leads, companies, the people behind them, and the matters in flight
 - **Case detail** — Overview (with separate Client and Account links),
   Contacts, Thread, Tasks, Documents and **Automations**; a primary
   **category**, manual **escalations** with reason and history, closed date
-  and resolution time (when known), and the lifecycle history.
+  and resolution time (when known), and the lifecycle history. The
+  **Thread** is the Case's timeline: comments plus automatic activity
+  (status, category, priority, owner, escalations, tasks, documents with
+  links, logged emails/meetings) and one summary card each for outgoing
+  and incoming phone calls.
 - **Case automations** — build, name and save visual workflows per case, or
   share one globally with every case; customize a global for one case and
   revert. *Management only — automations are not executed yet.*
@@ -105,8 +109,8 @@ arrives with the role-based access phases.
 | `pnpm dev:api` | API only |
 | `pnpm dev:web` | Frontend only |
 | `pnpm typecheck` | TypeScript across the workspace — currently clean |
-| `pnpm test` | Test suite (Vitest + Supertest) — 619 tests in 47 files |
-| `pnpm test:e2e` | Playwright RBAC, dashboard and case-lifecycle browser suite (e2e/) — 48 tests |
+| `pnpm test` | Test suite (Vitest + Supertest) — 638 tests in 48 files |
+| `pnpm test:e2e` | Playwright RBAC, dashboard and case-lifecycle browser suite (e2e/) — 53 tests |
 | `pnpm build` | Production builds for everything |
 | `pnpm api:generate` | Orval regen — **don't**, the spec it reads is stale |
 

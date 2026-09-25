@@ -10,8 +10,31 @@ recovered working tree — the project had no repository, so there is no history
 ## [Unreleased]
 
 Everything since the recovery release, 2026-09-22 → 2026-09-24.
-State at the end of this section: typecheck clean, **619 tests in 47 files**;
-Playwright 48 tests.
+State at the end of this section: typecheck clean, **638 tests in 48 files**;
+Playwright 53 tests.
+
+### Added — Phase 7 follow-up: the Case Thread as a unified timeline (2026-09-25)
+- **Thread = comments + system activity**, merged and ordered on the server
+  (`GET /api/cases/:id/feed`): status/close/reopen (from the Phase 7
+  history), category, priority, owner, account and primary-client changes,
+  escalation raised/resolved, task created/completed/reopened, document
+  uploaded (name links to the document), logged emails/SMS/meetings, and
+  ONE outgoing and ONE incoming phone-call card (count, latest call, up to
+  three previous, "View call details" → Contacts tab), derived from the
+  call log and placed at the latest call. Human comments and @-mentions are
+  unchanged; system entries are read-only and never mention anyone.
+- Every system entry is attributed to the signed-in employee who caused it
+  (id + historical name). Nothing earlier is fabricated: older tasks and
+  documents show "creator/uploader not recorded".
+- Tasks record who created them and who completed them (current
+  completion, cleared on reopen); documents record who added them. Changes
+  that have no record of their own are kept in a new append-only
+  `caseActivities` collection. No migration; store stays at schema v2.
+- The Thread count is now the number of timeline entries (each call card
+  counts once). Also shown in the Board's case popup.
+- Reserved but not produced: document removal (doesn't exist) and
+  "Automation ran" (no automation engine yet).
+- Tests: 19 API/unit tests and 5 Playwright tests.
 
 ### Fixed — Phase 7 follow-up: Category on the Board's New Case popup (2026-09-25)
 - Records → Cases → Board's own New Case popup now offers the same optional

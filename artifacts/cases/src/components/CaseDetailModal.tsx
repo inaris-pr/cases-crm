@@ -28,6 +28,8 @@ import type {
   CaseContact,
   CaseStatus,
   CaseThreadEntry,
+  CaseFeed,
+  FeedEntry,
   CaseWithCustomer,
   ContactChannel,
   ContactDirection,
@@ -40,6 +42,7 @@ import { Button } from "@/components/ui/Button";
 import { Avatar } from "@/components/ui/Avatar";
 import { PriorityBadge } from "@/components/ui/Badge";
 import { CategoryChip, EscalationMarker } from "@/components/cases/CaseLifecycle";
+import { CaseFeedList } from "@/components/cases/CaseFeed";
 import { MentionBody, MentionTextarea } from "@/components/MentionInput";
 import { caseControls } from "@cases/access";
 import { useAccess } from "@/lib/useAccess";
@@ -146,9 +149,11 @@ function Inner({ caseId, onClose }: { caseId: number; onClose: () => void }) {
     queryKey: ["case-contacts", caseId],
     queryFn: () => fetchJson<CaseContact[]>(API(`/api/cases/${caseId}/contacts`)),
   });
+  // The unified Thread (comments + system activity) — same feed as Case Detail.
   const threadQuery = useQuery({
-    queryKey: ["case-thread", caseId],
-    queryFn: () => fetchJson<CaseThreadEntry[]>(API(`/api/cases/${caseId}/thread`)),
+    queryKey: ["case", caseId, "feed"],
+    queryFn: () => fetchJson<CaseFeed>(API(`/api/cases/${caseId}/feed`)),
+    enabled: caseId !== null,
   });
 
   const patchCase = useMutation({
@@ -178,7 +183,7 @@ function Inner({ caseId, onClose }: { caseId: number; onClose: () => void }) {
 
   const contactCount = contactsQuery.data?.length ?? 0;
   const documentCount = c.documents?.length ?? 0;
-  const threadCount = threadQuery.data?.length ?? 0;
+  const threadCount = threadQuery.data?.count ?? 0;
 
   return (
     <>
@@ -261,9 +266,10 @@ function Inner({ caseId, onClose }: { caseId: number; onClose: () => void }) {
         {tab === "thread" && (
           <ThreadTab
             caseId={caseId}
-            entries={threadQuery.data ?? []}
+            entries={threadQuery.data?.entries ?? []}
             loading={threadQuery.isLoading}
             canWork={ctl.work}
+            onViewCalls={() => setTab("contacts")}
           />
         )}
       </div>
@@ -489,6 +495,7 @@ function ContactsTab({
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["case-contacts", caseId] });
+      qc.invalidateQueries({ queryKey: ["case", caseId, "feed"] });
       setContact("");
       setSummary("");
     },
@@ -715,11 +722,13 @@ function ThreadTab({
   entries,
   loading,
   canWork,
+  onViewCalls,
 }: {
   caseId: number;
-  entries: CaseThreadEntry[];
+  entries: FeedEntry[];
   loading: boolean;
   canWork: boolean;
+  onViewCalls: () => void;
 }) {
   const qc = useQueryClient();
   const MY_NAME = useMyName();
@@ -732,6 +741,7 @@ function ThreadTab({
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["case-thread", caseId] });
+      qc.invalidateQueries({ queryKey: ["case", caseId, "feed"] });
       // @-mentions create Mention notifications in the Tags inbox.
       qc.invalidateQueries({ queryKey: ["mentions"] });
       setBody("");
@@ -769,33 +779,13 @@ function ThreadTab({
       ) : entries.length === 0 ? (
         <div className="rounded-lg border border-white/8 bg-white/[0.025] p-5 text-center">
           <MessageSquare size={16} className="mx-auto text-white/30 mb-1.5" />
-          <div className="text-xs text-white/55 font-semibold">No thread updates yet</div>
+          <div className="text-xs text-white/55 font-semibold">No activity yet</div>
           <div className="text-[11px] text-white/35 mt-0.5">
             Share notes here to keep the team aligned.
           </div>
         </div>
       ) : (
-        <div className="space-y-2">
-          {entries.map((entry) => (
-            <div
-              key={entry.id}
-              className="rounded-lg border border-white/8 bg-white/[0.025] p-2.5 flex items-start gap-2.5"
-            >
-              <Avatar name={entry.authorName} size={26} />
-              <div className="min-w-0 flex-1">
-                <div className="flex items-baseline gap-1.5">
-                  <span className="text-[13px] font-semibold text-white">{entry.authorName}</span>
-                  <span className="text-[10px] text-white/35">
-                    {formatRelative(entry.createdAt)}
-                  </span>
-                </div>
-                <div className="text-[13px] text-white/85 mt-0.5 leading-snug whitespace-pre-wrap">
-                  <MentionBody body={entry.body} />
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
+        <CaseFeedList entries={entries} onViewCalls={onViewCalls} />
       )}
     </div>
   );

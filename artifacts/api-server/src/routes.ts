@@ -48,6 +48,7 @@ import {
   resolveEscalation,
   statusHistory,
 } from "./caseLifecycle.js";
+import { buildCaseFeed, recordCaseActivity } from "./caseFeed.js";
 import {
   store,
   seed,
@@ -80,6 +81,8 @@ import {
   type CasePriority,
   type CaseStatus,
   type DocumentType,
+  type Doc,
+  type Task,
   type TaskStatus,
   type Contact,
   type Account,
@@ -674,8 +677,47 @@ export function buildApiRouter(): Router {
       // session's employee as the actor; everything else is a plain field.
       const { status, ...fields } = body;
       const now = new Date().toISOString();
+      const actor = requireAuth(req).user;
+      const before = {
+        category: c.category,
+        priority: c.priority,
+        accountId: c.accountId,
+        primaryContactId: c.primaryContactId,
+      };
       Object.assign(c, fields, { updatedAt: now });
-      if (status !== undefined) changeCaseStatus(c, status, requireAuth(req).user, now);
+      if (status !== undefined) changeCaseStatus(c, status, actor, now);
+      // Thread activity for real changes only (a no-op records nothing).
+      // Title/description/tags edits are not timeline events.
+      if (fields.category !== undefined && c.category !== before.category) {
+        recordCaseActivity(c.id, actor, now, { type: "category_change", from: before.category, to: c.category });
+      }
+      if (fields.priority !== undefined && c.priority !== before.priority) {
+        recordCaseActivity(c.id, actor, now, { type: "priority_change", from: before.priority, to: c.priority });
+      }
+      if (c.accountId !== before.accountId) {
+        const name = (id: number) => store.accounts.find((a) => a.id === id)?.name ?? `Account #${id}`;
+        recordCaseActivity(c.id, actor, now, {
+          type: "account_change",
+          fromAccountId: before.accountId,
+          fromName: name(before.accountId),
+          toAccountId: c.accountId,
+          toName: name(c.accountId),
+        });
+      }
+      if (c.primaryContactId !== before.primaryContactId) {
+        const name = (id: number | null) => {
+          if (id === null) return null;
+          const ct = store.contacts.find((x) => x.id === id);
+          return ct ? contactFullName(ct) : `Client #${id}`;
+        };
+        recordCaseActivity(c.id, actor, now, {
+          type: "primary_contact_change",
+          fromContactId: before.primaryContactId,
+          fromName: name(before.primaryContactId),
+          toContactId: c.primaryContactId,
+          toName: name(c.primaryContactId),
+        });
+      }
       res.json(caseWithRelations(c, p));
     }),
   );
@@ -1532,8 +1574,19 @@ export function buildApiRouter(): Router {
       if (!c) return res.status(404).json({ error: "not_found" });
       const target = reassignTarget(req, res, c, "cases.assign", "cases.view");
       if (!target) return;
+      const from = { userId: c.ownerUserId, name: userById(c.ownerUserId)?.name ?? c.ownerName };
       setOwner(c, target);
       c.updatedAt = new Date().toISOString();
+      // Thread activity: the owners by id (names as of now), actor = session.
+      if (from.userId !== target.id) {
+        recordCaseActivity(c.id, requireAuth(req).user, c.updatedAt, {
+          type: "owner_change",
+          fromUserId: from.userId,
+          fromName: from.name,
+          toUserId: target.id,
+          toName: target.name,
+        });
+      }
       res.json(caseWithRelations(c, principalOf(req)));
     }),
   );
@@ -1619,16 +1672,25 @@ export function buildApiRouter(): Router {
       const taskCase = findCaseFor(req, body.caseId);
       if (!taskCase) return res.status(404).json({ error: "case_not_found" });
       if (!canOn(principalOf(req), "cases.work", taskCase.ownerUserId)) return outOfScope(res, "cases.work");
-      const created = {
+      const me = requireAuth(req).user;
+      const now = new Date().toISOString();
+      const completed = body.status === "completed";
+      const created: Task = {
         id: nextTaskId(),
         caseId: body.caseId,
         title: body.title,
         description: body.description ?? null,
         status: body.status as TaskStatus,
         dueDate: body.dueDate ?? null,
-        createdAt: new Date().toISOString(),
+        createdAt: now,
+        createdByUserId: me.id,
+        createdByName: me.name,
+        completedAt: completed ? now : null,
+        completedByUserId: completed ? me.id : null,
+        completedByName: completed ? me.name : null,
       };
       store.tasks.push(created);
+      if (completed) recordCaseActivity(created.caseId, me, now, { type: "task_completed", taskId: created.id, title: created.title });
       res.status(201).json(created);
     }),
   );
@@ -1650,7 +1712,30 @@ export function buildApiRouter(): Router {
       const taskCase = t ? findCaseFor(req, t.caseId) : undefined;
       if (!t || !taskCase) return res.status(404).json({ error: "not_found" });
       if (!canOn(principalOf(req), "cases.work", taskCase.ownerUserId)) return outOfScope(res, "cases.work");
+      const wasCompleted = t.status === "completed";
       Object.assign(t, body);
+      const isCompleted = t.status === "completed";
+      // Completion is recorded with the session's employee: the task keeps
+      // the CURRENT completion, the Thread keeps every completion/reopen.
+      if (!wasCompleted && isCompleted) {
+        const me = requireAuth(req).user;
+        const now = new Date().toISOString();
+        t.completedAt = now;
+        t.completedByUserId = me.id;
+        t.completedByName = me.name;
+        recordCaseActivity(t.caseId, me, now, { type: "task_completed", taskId: t.id, title: t.title });
+      } else if (wasCompleted && !isCompleted) {
+        const me = requireAuth(req).user;
+        t.completedAt = null;
+        t.completedByUserId = null;
+        t.completedByName = null;
+        recordCaseActivity(t.caseId, me, new Date().toISOString(), {
+          type: "task_reopened",
+          taskId: t.id,
+          title: t.title,
+          toStatus: t.status,
+        });
+      }
       res.json(t);
     }),
   );
@@ -1686,7 +1771,8 @@ export function buildApiRouter(): Router {
       const docCase = findCaseFor(req, body.caseId);
       if (!docCase) return res.status(404).json({ error: "case_not_found" });
       if (!canOn(principalOf(req), "cases.work", docCase.ownerUserId)) return outOfScope(res, "cases.work");
-      const created = {
+      const uploader = requireAuth(req).user;
+      const created: Doc = {
         id: nextDocumentId(),
         caseId: body.caseId,
         filename: body.filename,
@@ -1695,6 +1781,8 @@ export function buildApiRouter(): Router {
         size: body.size,
         tags: body.tags,
         createdAt: new Date().toISOString(),
+        uploadedByUserId: uploader.id,
+        uploadedByName: uploader.name,
       };
       store.documents.push(created);
       res.status(201).json(created);
@@ -1763,6 +1851,22 @@ export function buildApiRouter(): Router {
         .filter((t) => t.caseId === id)
         .sort((a, b) => +new Date(a.createdAt) - +new Date(b.createdAt));
       res.json(rows);
+    }),
+  );
+
+  /**
+   * The unified Thread feed (Phase 7 follow-up): human comments and system
+   * activity, merged and ordered on the server (oldest first). Same access
+   * as the Case itself. GET /cases/:id/thread still returns comments only.
+   */
+  r.get(
+    "/cases/:id/feed",
+    allow("cases.view"),
+    asyncHandler(async (req, res) => {
+      const { id } = idParam.parse(req.params);
+      if (!findCaseFor(req, id)) return res.status(404).json({ error: "not_found" });
+      const entries = buildCaseFeed(id);
+      res.json({ caseId: id, count: entries.length, entries });
     }),
   );
 

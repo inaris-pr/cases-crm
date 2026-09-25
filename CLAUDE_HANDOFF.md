@@ -10,8 +10,9 @@ identity foundation** (and its browser-login fix) and **RBAC Phase 2 —
 permission core**, **RBAC Phase 3 — backend enforcement** and **RBAC Phase 4 —
 stable ownership ids and real team scope** and **RBAC Phase 5 — role-aware
 frontend** and **RBAC Phase 6 — personalized role dashboards** and **Phase 7 —
-case lifecycle, categories & escalations**. Typecheck clean; **619 tests
-across 47 files**, all passing; Playwright 48 tests. Default branch `main`, pushed to the private
+case lifecycle, categories & escalations** (with the unified Case Thread
+follow-up). Typecheck clean; **638 tests across 48 files**, all passing;
+Playwright 53 tests. Default branch `main`, pushed to the private
 remote `inaris-pr/cases-crm`.
 
 ---
@@ -48,6 +49,7 @@ Since recovery (all 2026-09-22/23, see CHANGELOG.md):
 | RBAC Phase 5 | Role-aware frontend: sidebar, Records tabs, route guard, section and control gating, reassign UI, interim Dashboard; Playwright RBAC suite in CI (§2 Frontend access) |
 | RBAC Phase 6 | Personalized role dashboards: `GET /api/dashboard` with permission-gated, scope-computed sections; widget registry by permission; derived case last activity (§2 Dashboards) |
 | Phase 7 | Case categories, status history with real closedAt / reopen, resolution time, manual escalations with history; filters and dashboard integration; no migration (§2 Case lifecycle) |
+| Phase 7 follow-ups | Category on the Board's New Case popup; the Case Thread as a unified timeline of comments + system activity (§2 Case Thread) |
 
 ---
 
@@ -271,7 +273,7 @@ same lib/access rules the API enforces (`@cases/access`, a Vite alias):
   (active, can view that record type, inside the caller's assign scope)
   and sends `{ ownerUserId }`.
 - **Dashboard**: replaced by the Phase 6 dashboards (below).
-- **Browser tests**: `e2e/` (Playwright, 48 tests, `pnpm test:e2e`) starts its
+- **Browser tests**: `e2e/` (Playwright, 53 tests, `pnpm test:e2e`) starts its
   own API (fresh temp store via `CASES_DATA_DIR`) and Vite on 3101/5174;
   CI job `e2e`. e2e/ is outside the pnpm workspace; `@playwright/test` is
   pinned exactly in `e2e/package.json` and locked by `e2e/package-lock.json`
@@ -408,6 +410,46 @@ from another and nothing is classified or escalated automatically.
 - **Deferred**: automatic escalation, SLA deadlines/timers, business-hours
   calendars, state-specific filing timelines, external alerts, chargebacks,
   AI categorization.
+
+### Case Thread — unified operational timeline (Phase 7 follow-up)
+
+The Thread tab shows human comments interleaved with system activity, from
+`GET /api/cases/:id/feed` (`src/caseFeed.ts`): `{ caseId, count, entries }`,
+merged and ordered on the server, oldest first (the Thread's existing
+order); ties broken by type, then key. Same access as the Case
+(`cases.view` + record scope). `GET /cases/:id/thread` still returns
+comments only; posting comments (and @-mentions) is unchanged.
+
+| Entry `type` | Source (derived unless noted) |
+|---|---|
+| `comment` | `threadEntries` — human comments; the only entries with @-mentions |
+| `status_change` (`kind`: status_change / closed / reopened) | `caseStatusEvents` (Phase 7 lifecycle — the same events as the history card) |
+| `category_change`, `priority_change`, `owner_change`, `account_change`, `primary_contact_change`, `task_completed`, `task_reopened` | **persisted** `caseActivities`, appended when the change happens (`recordCaseActivity`) — only on a real change, never on a no-op |
+| `escalation_created`, `escalation_resolved` | `caseEscalations` |
+| `task_created` | `tasks` (`createdAt`, `createdByUserId/Name`) |
+| `document_uploaded` | `documents` (`createdAt`, `uploadedByUserId/Name`); `href` only for an http(s) `fileUrl` (the Documents tab's link), else no link |
+| `calls_outgoing_summary`, `calls_incoming_summary` | `caseInteractions` with channel `phone`, ONE entry per direction: `count`, `latest` (who, when, contact, summary), up to 3 `previous`; placed at the latest call, recomputed on every read — no stored counter |
+| `contact_logged` | `caseInteractions` with other channels (email, SMS, meeting, other) — one compact entry each |
+| `document_removed`, `automation_execution` | reserved types, never produced: no document removal exists, and no automation engine exists (the Run button only animates) |
+
+- **Actors**: always the session's employee (id + name label as of the
+  event); body-supplied names/ids are ignored. Historical labels are never
+  rewritten.
+- **Not recorded** (never guessed): creators of tasks and uploaders of
+  documents added before this change ("Creator/Uploader not recorded"), and
+  completion of tasks completed before it (no entry). Title, description
+  and tag edits are not timeline events. Viewing, searching and filtering
+  are never logged.
+- **Tasks** now keep `createdByUserId/Name` and the CURRENT completion
+  (`completedAt`, `completedByUserId/Name`, cleared on reopen); every
+  completion/reopen is in `caseActivities`.
+- **Count**: the number beside Thread = `count` = feed entries (each call
+  card counts once).
+- **Storage**: additive — nullable task/document fields filled in memory on
+  load, new `caseActivities` collection (empty when absent). No schema
+  version, no migration.
+- **Calls have no duration field**, so call cards show time, who and
+  contact but no duration.
 
 ### Domain model
 
@@ -631,7 +673,7 @@ alias for `accountId`.
 
 ### Test coverage
 
-`pnpm test`: Vitest + Supertest, **47 files / 619 tests** in
+`pnpm test`: Vitest + Supertest, **48 files / 638 tests** in
 `artifacts/api-server/test/`. Covers stable ownership (v2 migration,
 refusal on unmapped/ambiguous names, rename safety, spoofing, history),
 team scope and reassignment, authorization (every route declared,

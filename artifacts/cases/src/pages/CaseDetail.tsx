@@ -27,6 +27,8 @@ import type {
   CaseCategory,
   CaseContact,
   CaseDetail as CaseDetailType,
+  CaseFeed,
+  FeedEntry,
   CasePriority,
   CaseStatus,
   CaseThreadEntry,
@@ -48,6 +50,7 @@ import { useMyName } from "@/lib/auth";
 import { useAccess } from "@/lib/useAccess";
 import { caseControls, type CaseControls } from "@cases/access";
 import { ReassignControl } from "@/components/ReassignControl";
+import { CaseFeedList } from "@/components/cases/CaseFeed";
 import {
   CaseHistoryCard,
   CategoryChip,
@@ -141,9 +144,12 @@ export function CaseDetail() {
     queryFn: () => fetchJson<CaseContact[]>(API(`/api/cases/${id}/contacts`)),
     enabled: !Number.isNaN(id),
   });
-  const threadQ = useQuery({
-    queryKey: ["case-thread", id],
-    queryFn: () => fetchJson<CaseThreadEntry[]>(API(`/api/cases/${id}/thread`)),
+  // The unified Thread (comments + system activity), merged by the server.
+  // Keyed under ["case", id] so every case mutation that refreshes the case
+  // refreshes the timeline too.
+  const feedQ = useQuery({
+    queryKey: ["case", id, "feed"],
+    queryFn: () => fetchJson<CaseFeed>(API(`/api/cases/${id}/feed`)),
     enabled: !Number.isNaN(id),
   });
 
@@ -248,8 +254,8 @@ export function CaseDetail() {
         </TabBtn>
         <TabBtn active={tab === "thread"} onClick={() => requestTab("thread")} icon={MessageSquare}>
           Thread
-          {(threadQ.data?.length ?? 0) > 0 && (
-            <span className="text-white/40 ml-1.5 text-[11px]">{threadQ.data!.length}</span>
+          {(feedQ.data?.count ?? 0) > 0 && (
+            <span className="text-white/40 ml-1.5 text-[11px]" data-testid="thread-count">{feedQ.data!.count}</span>
           )}
         </TabBtn>
         <TabBtn active={tab === "tasks"} onClick={() => requestTab("tasks")} icon={ListTodo}>
@@ -291,9 +297,10 @@ export function CaseDetail() {
           {tab === "thread" && (
             <ThreadTab
               caseId={c.id}
-              entries={threadQ.data ?? []}
-              loading={threadQ.isLoading}
+              entries={feedQ.data?.entries ?? []}
+              loading={feedQ.isLoading}
               canWork={ctl.work}
+              onViewCalls={() => requestTab("contacts")}
             />
           )}
           {tab === "tasks" && <TasksTab caseDetail={c} canWork={ctl.work} />}
@@ -570,6 +577,7 @@ function DetailsCard({
         <div>
           <Label>Priority</Label>
           <Select
+            data-testid="case-priority-select"
             value={caseDetail.priority}
             onChange={(e) => onChangePriority(e.target.value as CasePriority)}
           >
@@ -619,6 +627,7 @@ function ContactsTab({
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["case-contacts", caseId] });
+      qc.invalidateQueries({ queryKey: ["case", caseId, "feed"] });
       setContact("");
       setSummary("");
     },
@@ -638,6 +647,7 @@ function ContactsTab({
           <div>
             <Label>Direction</Label>
             <Select
+              data-testid="contact-direction"
               value={direction}
               onChange={(e) => setDirection(e.target.value as ContactDirection)}
             >
@@ -648,6 +658,7 @@ function ContactsTab({
           <div>
             <Label>Channel</Label>
             <Select
+              data-testid="contact-channel"
               value={channel}
               onChange={(e) => setChannel(e.target.value as ContactChannel)}
             >
@@ -752,12 +763,16 @@ function ThreadTab({
   entries,
   loading,
   canWork,
+  onViewCalls,
 }: {
   caseId: number;
-  entries: CaseThreadEntry[];
+  /** The unified feed: comments and system activity, oldest first. */
+  entries: FeedEntry[];
   loading: boolean;
   /** Commenting needs cases.work on this case. */
   canWork: boolean;
+  /** Opens the detailed call log (Contacts tab). */
+  onViewCalls: () => void;
 }) {
   const qc = useQueryClient();
   const MY_NAME = useMyName();
@@ -770,6 +785,7 @@ function ThreadTab({
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["case-thread", caseId] });
+      qc.invalidateQueries({ queryKey: ["case", caseId, "feed"] });
       // @-mentions create Mention notifications in the Tags inbox.
       qc.invalidateQueries({ queryKey: ["mentions"] });
       setBody("");
@@ -810,33 +826,13 @@ function ThreadTab({
           <div className="size-12 rounded-2xl bg-white/5 grid place-items-center text-white/40 mx-auto mb-3">
             <MessageSquare size={20} />
           </div>
-          <h3 className="text-base font-semibold mb-1">No thread updates yet</h3>
+          <h3 className="text-base font-semibold mb-1">No activity yet</h3>
           <p className="text-sm text-white/50 max-w-sm mx-auto">
-            Keep the team aligned by sharing case notes here.
+            Comments and case activity — status, tasks, documents, calls, escalations — appear here.
           </p>
         </div>
       ) : (
-        <div className="space-y-2">
-          {entries.map((entry) => (
-            <div
-              key={entry.id}
-              className="rounded-xl border border-white/8 bg-white/[0.025] p-4 flex items-start gap-3"
-            >
-              <Avatar name={entry.authorName} size={34} />
-              <div className="min-w-0 flex-1">
-                <div className="flex items-baseline gap-2">
-                  <span className="text-sm font-semibold text-white">{entry.authorName}</span>
-                  <span className="text-[11px] text-white/40">
-                    {formatRelative(entry.createdAt)}
-                  </span>
-                </div>
-                <div className="text-sm text-white/85 mt-1 leading-relaxed whitespace-pre-wrap">
-                  <MentionBody body={entry.body} />
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
+        <CaseFeedList entries={entries} onViewCalls={onViewCalls} />
       )}
     </div>
   );
@@ -891,6 +887,7 @@ function TasksTab({ caseDetail, canWork }: { caseDetail: CaseDetailType; canWork
               disabled={!canWork}
               className="text-white/50 hover:text-[var(--color-primary)] disabled:hover:text-white/50 disabled:cursor-default"
               aria-label="Cycle status"
+              data-testid={`task-cycle-${t.id}`}
             >
               {t.status === "completed" ? (
                 <CheckCircle2 size={18} className="text-[var(--color-primary)]" />
@@ -1010,7 +1007,7 @@ function DocumentsTab({ caseDetail, canWork }: { caseDetail: CaseDetailType; can
       >
         <div className="flex-1 min-w-[160px]">
           <Label>Filename</Label>
-          <Input value={filename} onChange={(e) => setFilename(e.target.value)} />
+          <Input data-testid="document-filename" value={filename} onChange={(e) => setFilename(e.target.value)} />
         </div>
         <div>
           <Label>Type</Label>
@@ -1024,7 +1021,7 @@ function DocumentsTab({ caseDetail, canWork }: { caseDetail: CaseDetailType; can
         </div>
         <div className="flex-1 min-w-[160px]">
           <Label>URL</Label>
-          <Input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://…" />
+          <Input data-testid="document-url" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://…" />
         </div>
         <Button type="submit" disabled={!filename || !url || create.isPending}>
           <Upload size={13} />

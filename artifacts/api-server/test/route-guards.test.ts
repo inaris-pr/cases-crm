@@ -71,6 +71,7 @@ const ACCESS: [string, string, Access][] = [
   ["GET", "/cases/:id/contacts", ["cases.view"]],
   ["POST", "/cases/:id/contacts", ["cases.work"]],
   ["GET", "/cases/:id/thread", ["cases.view"]],
+  ["GET", "/cases/:id/feed", ["cases.view"]],
   ["POST", "/cases/:id/thread", ["cases.work"]],
   ["GET", "/mentions", ["messages.use"]],
   ["PATCH", "/mentions/:id/read", ["messages.use"]],
@@ -219,6 +220,7 @@ add("POST", "/documents", () => "/documents", () => ({ caseId: 1, filename: "a.p
 add("GET", "/cases/:id/contacts", () => "/cases/1/contacts");
 add("POST", "/cases/:id/contacts", () => "/cases/1/contacts", () => ({ direction: "inbound", channel: "phone", summary: "Called", contact: "Amelia" }));
 add("GET", "/cases/:id/thread", () => "/cases/1/thread");
+add("GET", "/cases/:id/feed", () => "/cases/1/feed");
 add("POST", "/cases/:id/thread", () => "/cases/1/thread", () => ({ body: "role test" }));
 add("GET", "/mentions", () => "/mentions");
 add("PATCH", "/mentions/:id/read", () => "/mentions/999999/read");

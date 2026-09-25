@@ -313,6 +313,12 @@ export interface Task {
   status: TaskStatus;
   dueDate: string | null;
   createdAt: string;
+  /** Thread follow-up: null when not recorded (older tasks). */
+  createdByUserId?: number | null;
+  createdByName?: string | null;
+  completedAt?: string | null;
+  completedByUserId?: number | null;
+  completedByName?: string | null;
 }
 
 export interface Doc {
@@ -324,6 +330,9 @@ export interface Doc {
   size: number;
   tags: string[];
   createdAt: string;
+  /** Thread follow-up: null for documents added before it. */
+  uploadedByUserId?: number | null;
+  uploadedByName?: string | null;
 }
 
 export interface CaseDetail extends CaseWithRelations {
@@ -667,4 +676,49 @@ export interface DashboardData {
   accounts?: DashboardAccounts;
   people?: DashboardPeople;
   communication?: DashboardCommunication;
+}
+
+// ── Case Thread feed (Phase 7 follow-up) — mirrors api-server/src/caseFeed.ts ──
+// GET /api/cases/:id/feed: human comments and system activity, merged and
+// ordered on the server (oldest first).
+
+export interface FeedActor {
+  userId: number | null;
+  name: string;
+}
+
+export interface CallSummary {
+  id: number;
+  at: string;
+  by: FeedActor;
+  contact: string;
+  summary: string;
+}
+
+type FeedEntryOf<T extends string, D> = { key: string; type: T; at: string; actor: FeedActor | null } & D;
+
+export type FeedEntry =
+  | FeedEntryOf<"comment", { comment: { id: number; authorName: string; authorUserId: number | null; body: string; createdAt: string } }>
+  | FeedEntryOf<"status_change", { kind: "status_change" | "closed" | "reopened"; fromStatus: CaseStatus | null; toStatus: CaseStatus }>
+  | FeedEntryOf<"category_change", { from: CaseCategory | null; to: CaseCategory | null }>
+  | FeedEntryOf<"priority_change", { from: CasePriority; to: CasePriority }>
+  | FeedEntryOf<"owner_change", { fromUserId: number | null; fromName: string; toUserId: number; toName: string }>
+  | FeedEntryOf<"account_change", { fromAccountId: number; fromName: string; toAccountId: number; toName: string }>
+  | FeedEntryOf<"primary_contact_change", { fromContactId: number | null; fromName: string | null; toContactId: number | null; toName: string | null }>
+  | FeedEntryOf<"escalation_created", { escalationId: number; reason: EscalationReason; note: string | null }>
+  | FeedEntryOf<"escalation_resolved", { escalationId: number; reason: EscalationReason }>
+  | FeedEntryOf<"task_created", { taskId: number; title: string }>
+  | FeedEntryOf<"task_completed", { taskId: number; title: string }>
+  | FeedEntryOf<"task_reopened", { taskId: number; title: string; toStatus: TaskStatus }>
+  | FeedEntryOf<"document_uploaded", { documentId: number; filename: string; href: string | null }>
+  | FeedEntryOf<"document_removed", { documentId: number; filename: string }>
+  | FeedEntryOf<"calls_outgoing_summary" | "calls_incoming_summary", { count: number; latest: CallSummary; previous: { id: number; at: string; by: FeedActor }[] }>
+  | FeedEntryOf<"contact_logged", { interactionId: number; direction: ContactDirection; channel: ContactChannel; contact: string; summary: string }>
+  | FeedEntryOf<"automation_execution", { automationId: number; automationName: string; outcome: "succeeded" | "failed" }>;
+
+export interface CaseFeed {
+  caseId: number;
+  /** Entries in the feed (each aggregated call card counts once). */
+  count: number;
+  entries: FeedEntry[];
 }

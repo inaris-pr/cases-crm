@@ -243,6 +243,35 @@ export interface CaseEscalation {
   resolvedByName: string | null;
 }
 
+/**
+ * A recorded change to a Case that has no authoritative record of its own
+ * (Thread follow-up). Append-only and immutable: the values are those at the
+ * moment of the change and are never rewritten. Everything else in the
+ * Thread feed (comments, status history, escalations, task creation,
+ * documents, calls) is derived from its own records — see caseFeed.ts.
+ */
+export type CaseActivity = {
+  id: number;
+  caseId: number;
+  at: string;
+  actorUserId: number | null;   // authoritative: the session's employee
+  actorName: string;            // label as of the change
+} & (
+  | { type: "category_change"; from: CaseCategory | null; to: CaseCategory | null }
+  | { type: "priority_change"; from: CasePriority; to: CasePriority }
+  | { type: "owner_change"; fromUserId: number | null; fromName: string; toUserId: number; toName: string }
+  | { type: "account_change"; fromAccountId: number; fromName: string; toAccountId: number; toName: string }
+  | {
+      type: "primary_contact_change";
+      fromContactId: number | null;
+      fromName: string | null;
+      toContactId: number | null;
+      toName: string | null;
+    }
+  | { type: "task_completed"; taskId: number; title: string }
+  | { type: "task_reopened"; taskId: number; title: string; toStatus: TaskStatus }
+);
+
 export interface Task {
   id: number;
   caseId: number;
@@ -251,6 +280,14 @@ export interface Task {
   status: TaskStatus;
   dueDate: string | null;
   createdAt: string;
+  // ── Thread follow-up (additive; null when not recorded, e.g. older tasks) ──
+  /** Who created the task (the session's employee). */
+  createdByUserId: number | null;
+  createdByName: string | null;
+  /** The CURRENT completion: set when the task becomes completed, cleared when reopened. */
+  completedAt: string | null;
+  completedByUserId: number | null;
+  completedByName: string | null;
 }
 
 export interface Doc {
@@ -262,6 +299,9 @@ export interface Doc {
   size: number;
   tags: string[];
   createdAt: string;
+  /** Who added the document (the session's employee); null for older documents. */
+  uploadedByUserId: number | null;
+  uploadedByName: string | null;
 }
 
 export interface Conversation {
@@ -464,6 +504,7 @@ export const store = {
   automations: [] as Automation[],
   caseStatusEvents: [] as CaseStatusEvent[],
   caseEscalations: [] as CaseEscalation[],
+  caseActivities: [] as CaseActivity[],
   /** Schema version of the persisted store; see migrations.ts. */
   meta: { schemaVersion: 0 },
   seq: {
@@ -486,6 +527,7 @@ export const store = {
     automation: 0,
     caseStatusEvent: 0,
     caseEscalation: 0,
+    caseActivity: 0,
   },
 };
 
@@ -510,6 +552,7 @@ export const nextUserId = () => nextId("user");
 export const nextAutomationId = () => nextId("automation");
 export const nextCaseStatusEventId = () => nextId("caseStatusEvent");
 export const nextCaseEscalationId = () => nextId("caseEscalation");
+export const nextCaseActivityId = () => nextId("caseActivity");
 export const nextTeamId = () => nextId("team");
 export const nextSessionId = () => nextId("session");
 
@@ -629,6 +672,20 @@ export function makeAccount(
  * Seed Cases start uncategorized, and the seeded completed Case has no known
  * closing time — exactly like a real Case closed before Phase 7.
  */
+/**
+ * Seed tasks and documents predate creator/uploader tracking: those stay
+ * null, exactly like records created before the Thread follow-up. (A seeded
+ * completed task has no known completion time or actor either.)
+ */
+function seedTasks(
+  rows: Omit<Task, "createdByUserId" | "createdByName" | "completedAt" | "completedByUserId" | "completedByName">[],
+): Task[] {
+  return rows.map((t) => ({ ...t, createdByUserId: null, createdByName: null, completedAt: null, completedByUserId: null, completedByName: null }));
+}
+function seedDocuments(rows: Omit<Doc, "uploadedByUserId" | "uploadedByName">[]): Doc[] {
+  return rows.map((d) => ({ ...d, uploadedByUserId: null, uploadedByName: null }));
+}
+
 function withPhase7Defaults(rows: Omit<Case, "category" | "closedAt" | "closedByUserId" | "closedByName">[]): Case[] {
   return rows.map((c) => ({ ...c, category: null, closedAt: null, closedByUserId: null, closedByName: null }));
 }
@@ -661,6 +718,7 @@ const COLLECTION_SEQ: ReadonlyArray<
   ["automations", "automation"],
   ["caseStatusEvents", "caseStatusEvent"],
   ["caseEscalations", "caseEscalation"],
+  ["caseActivities", "caseActivity"],
 ];
 
 /**
@@ -712,6 +770,20 @@ function normalizeLoaded() {
     if (row.closedAt === undefined) row.closedAt = null;
     if (row.closedByUserId === undefined) row.closedByUserId = null;
     if (row.closedByName === undefined) row.closedByName = null;
+  }
+
+  // Thread follow-up: who created/completed a task and who added a document
+  // were never recorded before — null, never guessed.
+  for (const t of store.tasks) {
+    const row = t as unknown as Record<string, unknown>;
+    for (const k of ["createdByUserId", "createdByName", "completedAt", "completedByUserId", "completedByName"]) {
+      if (row[k] === undefined) row[k] = null;
+    }
+  }
+  for (const d of store.documents) {
+    const row = d as Partial<Doc> & Doc;
+    if (row.uploadedByUserId === undefined) row.uploadedByUserId = null;
+    if (row.uploadedByName === undefined) row.uploadedByName = null;
   }
 
   // caseNumber has no collection of its own — recover it from the case numbers
@@ -1395,7 +1467,7 @@ export function seed() {
   const [c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15] = cases;
 
   // ── Tasks (3–5 per case) ────────────────────────────────────────────────
-  store.tasks.push(
+  store.tasks.push(...seedTasks([
     { id: nextTaskId(), caseId: c1.id, title: "Reserve 'Helix Labs LLC' with DE Division of Corporations", description: null, status: "completed", dueDate: daysAgo(20), createdAt: daysAgo(22) },
     { id: nextTaskId(), caseId: c1.id, title: "Draft Certificate of Formation (v2)", description: "Single-member, perpetual duration.", status: "in_progress", dueDate: daysAgo(-2), createdAt: daysAgo(18) },
     { id: nextTaskId(), caseId: c1.id, title: "Confirm CSC as registered agent", description: null, status: "in_progress", dueDate: daysAgo(-3), createdAt: daysAgo(15) },
@@ -1475,10 +1547,10 @@ export function seed() {
     { id: nextTaskId(), caseId: c15.id, title: "Draft & file CA Form LLC-1 ($70)", description: null, status: "in_progress", dueDate: daysAgo(-2), createdAt: daysAgo(5) },
     { id: nextTaskId(), caseId: c15.id, title: "Draft single-member Operating Agreement", description: null, status: "pending", dueDate: daysAgo(-5), createdAt: daysAgo(4) },
     { id: nextTaskId(), caseId: c15.id, title: "File Statement of Information (LLC-12) within 90 days", description: null, status: "pending", dueDate: daysAgo(-80), createdAt: daysAgo(3) },
-  );
+  ]));
 
   // ── Documents ───────────────────────────────────────────────────────────
-  store.documents.push(
+  store.documents.push(...seedDocuments([
     { id: nextDocumentId(), caseId: c1.id, filename: "DE-Certificate-of-Formation-v2.docx",     fileUrl: "https://example.com/docs/de-cof-v2.docx",      type: "contract", size: 48211,  tags: ["DE", "draft", "v2"],            createdAt: daysAgo(18) },
     { id: nextDocumentId(), caseId: c1.id, filename: "CSC-Registered-Agent-Acceptance.pdf",     fileUrl: "https://example.com/docs/csc-ra.pdf",          type: "contract", size: 28140,  tags: ["DE", "registered-agent"],       createdAt: daysAgo(15) },
     { id: nextDocumentId(), caseId: c2.id, filename: "NY-Certificate-of-Publication.pdf",       fileUrl: "https://example.com/docs/ny-cop.pdf",          type: "identity", size: 31200,  tags: ["NY", "publication"],             createdAt: daysAgo(8) },
@@ -1491,7 +1563,7 @@ export function seed() {
     { id: nextDocumentId(), caseId: c11.id, filename: "IRS-Form-SS-4-Submitted.pdf",            fileUrl: "https://example.com/docs/ss-4.pdf",            type: "report",   size: 64210,  tags: ["IRS", "ein", "form-ss-4"],       createdAt: daysAgo(6) },
     { id: nextDocumentId(), caseId: c11.id, filename: "Meridian-Operating-Agreement-v1.docx",   fileUrl: "https://example.com/docs/meridian-oa.docx",    type: "contract", size: 184550, tags: ["TX", "operating-agreement"],     createdAt: daysAgo(5) },
     { id: nextDocumentId(), caseId: c14.id, filename: "Sterling-FL-Articles-Draft.pdf",         fileUrl: "https://example.com/docs/sterling-fl.pdf",     type: "report",   size: 56400,  tags: ["FL", "articles-of-organization", "draft"], createdAt: daysAgo(10) },
-  );
+  ]));
 
   // ── Case interactions (phone/email/meeting logs) ────────────────────────
   store.caseInteractions.push(
